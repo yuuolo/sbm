@@ -1,0 +1,10 @@
+[Unit]
+Description=每天 04:00（服务器时区）运行 sbm 维护
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+# 关机错过了时间，开机后补跑一次
+Persistent=true
+
+[Install]
+WantedBy=timers.target

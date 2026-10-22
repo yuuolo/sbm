@@ -1,0 +1,1667 @@
+#!/usr/bin/env python3
+"""sbm - sing-box 节点用户与订阅管理
+
+数据:   /etc/sbm/config.json  订阅域名、节点列表
+        /etc/sbm/users.json   用户（名称、节点账号、密码、订阅令牌、启用状态）
+        /etc/sbm/creds.json   账号池（备用账号、待清理账号、未同步成功的节点）
+输出:   /var/www/sub/<token>/{singbox.json,clash.yaml,uri.txt}，由 Nginx 提供
+
+为什么有账号池：sing-box 只在启动时读取用户列表，改用户必须重启节点。
+节点上始终放着「启用用户 + 备用账号 + 待清理账号」这一整套账号，
+新增用户只是把一个备用账号分配给他，节点上的账号集合不变，无需重启；
+删除、停用的账号先留在节点上，由每天凌晨的维护（sbm sync）统一清理并补满账号池。
+"""
+import argparse
+import base64
+import contextlib
+import fcntl
+import json
+import os
+import re
+import secrets
+import shlex
+import shutil
+import socket
+import sqlite3
+import string
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+
+ETC = "/etc/sbm"
+CONF = f"{ETC}/config.json"
+USERS = f"{ETC}/users.json"
+WWW = "/var/www/sub"
+ALNUM = string.ascii_letters + string.digits
+NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
+
+
+def die(msg):
+    print(f"错误: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def rand(n):
+    return "".join(secrets.choice(ALNUM) for _ in range(n))
+
+
+def load(path, default=None):
+    if not os.path.exists(path):
+        if default is None:
+            die(f"找不到 {path}")
+        return default
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_file(path, text, mode=0o644):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def locked():
+    """命令行和 Web 管理界面共用的互斥锁，避免两边同时改用户、同时推送节点。"""
+    with open(f"{ETC}/.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def save_users(users):
+    write_file(USERS, json.dumps(users, indent=2, ensure_ascii=False) + "\n", 0o600)
+
+
+def load_users():
+    users = load(USERS, [])
+    for u in users:
+        # 账号池之前创建的用户：节点上的账号名就是用户名
+        u.setdefault("cred", u["name"])
+        u.setdefault("note", "")
+        # 流量统计按 id 归属，用户名可能被删除后重新使用；老用户在下一次保存时补上 id
+        u.setdefault("id", secrets.token_hex(6))
+    return users
+
+
+# ---------- 节点 ----------
+
+def ssh(node, cmd, stdin=""):
+    # stdin 默认给空串：否则 ssh 会吞掉调用方（例如管道脚本）的标准输入
+    args = [
+        "ssh", "-i", node["ssh_key"], "-p", str(node.get("ssh_port", 22)),
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+        # 新节点第一次连接时自动记下主机密钥；之后密钥变了仍会拒绝连接
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"{node['ssh_user']}@{node['host']}", cmd,
+    ]
+    return subprocess.run(args, input=stdin, capture_output=True, text=True)
+
+
+PUSH_SCRIPT = r"""
+set -e
+p={path}
+ts=$(date +%Y%m%d-%H%M%S)
+trap 'rm -f "$p.new"' EXIT
+cat > "$p.new"
+sing-box check -c "$p.new"
+if cmp -s "$p" "$p.new"; then echo UNCHANGED; exit 0; fi
+cp -a "$p" "$p.sbm-$ts"
+mv "$p.new" "$p"
+systemctl restart sing-box
+sleep 2
+if ! systemctl is-active --quiet sing-box; then
+    cp -a "$p.sbm-$ts" "$p"
+    systemctl restart sing-box
+    echo ROLLBACK
+    exit 1
+fi
+ls -1t "$p".sbm-* | tail -n +6 | xargs -r rm -f
+echo APPLIED
+"""
+
+
+# ---------- 流量统计（节点侧） ----------
+# 官方 sing-box 没有按用户的流量计数器，做法是：每个账号一个专属 direct 出站，
+# 用 routing_mark 给它的连接打上唯一编号，路由规则按 auth_user 把账号的流量送到对应出站；
+# 节点上用 iptables 按编号计数（上传在 OUTPUT 计包标记，下载靠 CONNMARK 在 INPUT 计连接标记）。
+
+STATS_PREFIX = "sbm-u-"
+MARK_BASE = 0x5B0000  # 编号范围 0x5b0000~0x5bffff，用掩码 0xffff0000 识别
+
+NODE_STATS_SCRIPT = r"""#!/bin/bash
+# sbm 流量统计：按 sing-box 出站的 routing_mark 计数。由订阅服务器的 sbm 维护，请勿手动修改。
+#   sbm-stats apply  按 /etc/sbm-stats.marks 增删计数规则（只增删差异，已有计数不清零）
+#   sbm-stats read   输出 "族 方向 编号 字节数"
+MARKS=/etc/sbm-stats.marks
+apply() {
+  for t in iptables ip6tables; do
+    command -v $t >/dev/null || continue
+    $t -t mangle -N SBM_OUT 2>/dev/null; $t -t mangle -N SBM_IN 2>/dev/null
+    $t -t mangle -C OUTPUT -j SBM_OUT 2>/dev/null || $t -t mangle -I OUTPUT -j SBM_OUT
+    $t -t mangle -C INPUT -j SBM_IN 2>/dev/null || $t -t mangle -I INPUT -j SBM_IN
+    $t -t mangle -C SBM_OUT -m mark --mark 0x5b0000/0xffff0000 -j CONNMARK --save-mark 2>/dev/null \
+      || $t -t mangle -I SBM_OUT -m mark --mark 0x5b0000/0xffff0000 -j CONNMARK --save-mark
+    want=$(cat $MARKS 2>/dev/null)
+    have=$($t -t mangle -S SBM_IN | sed -n 's/.*--mark \(0x[0-9a-f]*\) -j RETURN.*/\1/p')
+    for m in $want; do
+      grep -qx "$m" <<<"$have" || { $t -t mangle -A SBM_OUT -m mark --mark $m -j RETURN; $t -t mangle -A SBM_IN -m connmark --mark $m -j RETURN; }
+    done
+    for m in $have; do
+      grep -qx "$m" <<<"$want" || { $t -t mangle -D SBM_OUT -m mark --mark $m -j RETURN; $t -t mangle -D SBM_IN -m connmark --mark $m -j RETURN; }
+    done
+  done
+}
+read_counters() {
+  for t in iptables ip6tables; do
+    command -v $t >/dev/null || continue
+    f=$([ $t = iptables ] && echo v4 || echo v6)
+    $t -t mangle -L SBM_OUT -nvx 2>/dev/null | awk -v f=$f '$3=="RETURN"{print f, "up", $NF, $2}'
+    $t -t mangle -L SBM_IN -nvx 2>/dev/null | awk -v f=$f '$3=="RETURN"{print f, "down", $NF, $2}'
+  done
+}
+case "$1" in
+  apply) apply ;;
+  read) read_counters ;;
+  *) echo "用法: sbm-stats apply|read" >&2; exit 2 ;;
+esac
+"""
+
+
+def apply_stats_routing(cfg, cred_list, marks):
+    """在节点配置里为每个账号生成专属出站和路由规则（先删掉 sbm 以前生成的，再追加）。
+    追加在原有规则之后，节点上原有的分流规则仍然优先。"""
+    outs = [o for o in cfg.get("outbounds", []) if not str(o.get("tag", "")).startswith(STATS_PREFIX)]
+    if not outs:
+        outs = [{"type": "direct", "tag": "direct"}]  # 第一个出站是默认出站，不能是统计用的
+    route = cfg.setdefault("route", {})
+    rules = [r for r in route.get("rules", []) if not str(r.get("outbound", "")).startswith(STATS_PREFIX)]
+    for c in cred_list:
+        tag = STATS_PREFIX + c["name"]
+        outs.append({"type": "direct", "tag": tag, "routing_mark": marks[c["name"]]})
+        rules.append({"auth_user": [c["name"]], "outbound": tag})
+    cfg["outbounds"] = outs
+    route["rules"] = rules
+
+
+def install_stats(node, cred_list, marks):
+    """安装/更新节点上的计数脚本和编号列表，并立即应用规则。"""
+    mark_lines = "".join(f"{marks[c['name']]:#x}\n" for c in cred_list)
+    cmd = ("cat > /usr/local/sbin/sbm-stats.new && chmod 755 /usr/local/sbin/sbm-stats.new"
+           " && mv /usr/local/sbin/sbm-stats.new /usr/local/sbin/sbm-stats"
+           f" && printf %s {shlex.quote(mark_lines)} > /etc/sbm-stats.marks && /usr/local/sbin/sbm-stats apply")
+    r = ssh(node, cmd, stdin=NODE_STATS_SCRIPT)
+    if r.returncode != 0:
+        raise SbmError(f"安装流量统计规则失败: {(r.stdout + r.stderr).strip()[-500:]}")
+
+
+def push_node(node, cred_list, marks):
+    """把账号写进节点入站的 users，并生成按账号统计流量的出站与规则。
+    内容没变就不动；变了才校验、重启，启动失败自动回滚。"""
+    r = ssh(node, f"cat {shlex.quote(node['config_path'])}")
+    if r.returncode != 0:
+        return False, f"读取配置失败: {r.stderr.strip()}"
+    cfg = json.loads(r.stdout)
+    inbound = next((i for i in cfg.get("inbounds", []) if i.get("tag") == node["inbound_tag"]), None)
+    if inbound is None:
+        return False, f"配置中没有 tag 为 {node['inbound_tag']} 的入站"
+    inbound["users"] = cred_list
+    apply_stats_routing(cfg, cred_list, marks)
+    try:
+        install_stats(node, cred_list, marks)
+    except SbmError as e:
+        return False, str(e)
+    new = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
+    r = ssh(node, PUSH_SCRIPT.format(path=shlex.quote(node["config_path"])), stdin=new)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode != 0:
+        return False, out
+    return True, out.splitlines()[-1]
+
+
+# ---------- 节点增删与部署 ----------
+
+KEY = "/root/.ssh/sbm_node"
+CF_INI = "/etc/letsencrypt/cloudflare.ini"
+NODE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
+SUB_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
+HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+
+
+class SbmError(Exception):
+    pass
+
+
+def save_conf(conf):
+    write_file(CONF, json.dumps(conf, indent=2, ensure_ascii=False) + "\n", 0o600)
+
+
+def base_domain(conf):
+    return conf.get("base_domain") or conf["sub_domain"].split(".", 1)[1]
+
+
+def authorize_command(conf):
+    """新节点上运行一次的授权命令：只允许来自订阅服务器 IP 的这把密钥登录 root。"""
+    with open(f"{KEY}.pub", encoding="utf-8") as f:
+        pub = f.read().strip()
+    line = f'from="{conf["manager_ip"]}" {pub}'
+    return (
+        "mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
+        f"grep -qF '{pub.split()[1]}' /root/.ssh/authorized_keys 2>/dev/null || "
+        f"echo '{line}' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys"
+    )
+
+
+def check_node_args(conf, name, host, ssh_port):
+    if not NODE_NAME_RE.match(name or ""):
+        raise SbmError("节点名只能包含字母、数字、_ . -，最长 32 位")
+    if any(n["name"] == name for n in conf["nodes"]):
+        raise SbmError(f"节点 {name} 已存在")
+    if not HOST_RE.match(host or ""):
+        raise SbmError("服务器地址无效")
+    if any(n["host"] == host for n in conf["nodes"]):
+        raise SbmError(f"服务器 {host} 已经在节点列表里")
+    if not 1 <= int(ssh_port) <= 65535:
+        raise SbmError("SSH 端口无效")
+
+
+def ssh_ok(node, cmd, what):
+    r = ssh(node, cmd)
+    if r.returncode != 0:
+        raise SbmError(f"{what}失败:\n{(r.stdout + r.stderr).strip()[-1500:]}")
+    return r.stdout.strip()
+
+
+def check_root_ssh(node, log):
+    log(f"连接 root@{node['host']}:{node['ssh_port']} …")
+    r = ssh(node, '. /etc/os-release 2>/dev/null; echo "$(id -u)|$PRETTY_NAME|$(uname -m)"')
+    if r.returncode != 0:
+        raise SbmError(
+            "SSH 登录失败。请确认已在新服务器上以 root 运行过授权命令，且安全组放行了 SSH 端口。\n"
+            + r.stderr.strip()[-500:]
+        )
+    uid, osname, arch = (r.stdout.strip().split("|") + ["", ""])[:3]
+    if uid != "0":
+        raise SbmError("需要 root 权限，请把授权命令加到 root 用户上")
+    log(f"  已连接：{osname} ({arch})")
+
+
+# ---------- 域名与 Cloudflare Token ----------
+# 每个主域名（Cloudflare 里的一个 zone）一个 Token 文件，certbot 格式，仅 root 可读。
+# 安装时设置的主域名沿用 /etc/letsencrypt/cloudflare.ini，已签发证书的续期配置都指向它；
+# 之后添加的域名放在 CF_DIR 下。Token 写入后不会再通过界面或接口返回。
+
+CF_DIR = "/etc/letsencrypt/sbm-cf"
+ZONE_RE = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,100}$")
+
+
+def domains(conf):
+    """域名列表；旧配置没有 domains 时，把原来唯一的主域名和 Token 迁移进来。"""
+    if "domains" not in conf:
+        conf["domains"] = [{"zone": base_domain(conf), "token_file": CF_INI, "note": "",
+                            "added": datetime.now().strftime("%Y-%m-%d %H:%M")}]
+    return conf["domains"]
+
+
+def get_domain(conf, zone):
+    for d in domains(conf):
+        if d["zone"] == zone:
+            return d
+    raise SbmError(f"域名 {zone} 不在列表里，请先在「域名管理」中添加")
+
+
+def domain_usage(conf, zone):
+    """哪些地方在用这个域名（订阅域名、节点），删除前要检查。"""
+    under = lambda host: host == zone or host.endswith("." + zone)
+    used = [f"订阅 {conf['sub_domain']}"] if under(conf["sub_domain"]) else []
+    return used + [f"节点 {n['name']}" for n in conf["nodes"] if n.get("managed") and under(n["server"])]
+
+
+def read_token(token_file):
+    try:
+        with open(token_file, encoding="utf-8") as f:
+            for line in f:
+                k, _, v = line.partition("=")
+                if k.strip() == "dns_cloudflare_api_token" and v.strip():
+                    return v.strip()
+    except FileNotFoundError:
+        pass
+    raise SbmError(f"{token_file} 里没有 Cloudflare Token")
+
+
+def write_token(token_file, token):
+    """直接以 600 权限创建临时文件再替换，Token 任何时候都不会被其他用户读到。"""
+    os.makedirs(os.path.dirname(token_file), mode=0o700, exist_ok=True)
+    tmp = f"{token_file}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(f"dns_cloudflare_api_token = {token}\n")
+    os.replace(tmp, token_file)
+
+
+def cf_request(token, method, path, body=None):
+    req = urllib.request.Request(
+        "https://api.cloudflare.com/client/v4" + path,
+        method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.load(e)
+        except ValueError:
+            raise SbmError(f"Cloudflare API 返回 HTTP {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        raise SbmError(f"连接 Cloudflare API 失败: {e}")
+    if not data.get("success"):
+        msgs = "; ".join(f"{x.get('code')} {x.get('message')}" for x in data.get("errors", []))
+        raise SbmError(f"Cloudflare API 出错: {msgs or data}")
+    return data["result"]
+
+
+def cf_zone_id(token, zone):
+    zones = cf_request(token, "GET", "/zones?" + urllib.parse.urlencode({"name": zone}))
+    if not zones:
+        raise SbmError(f"Token 无权访问 {zone}，或这个域名不在该 Token 所属的 Cloudflare 账号下")
+    return zones[0]
+
+
+def verify_token(zone, token, write_test=True):
+    """检查 Token 能否管理这个域名的 DNS。write_test 时创建并立即删除一条 TXT 记录来确认编辑权限。
+    返回给界面显示的结果列表。"""
+    try:
+        z = cf_zone_id(token, zone)
+    except SbmError as e:
+        if "Invalid API Token" in str(e) or "1000" in str(e) or "6003" in str(e) or "9109" in str(e):
+            raise SbmError("Token 无效或已被删除，请在 Cloudflare 重新创建")
+        raise
+    result = [f"可以访问 {zone}"]
+    if z.get("status") != "active":
+        result.append(f"⚠ 域名在 Cloudflare 的状态是 {z.get('status')}（NS 可能还没改到 Cloudflare），解析暂时不会生效")
+    cf_request(token, "GET", f"/zones/{z['id']}/dns_records?per_page=1")
+    result.append("可以读取 DNS 记录")
+    if write_test:
+        try:
+            rec = cf_request(token, "POST", f"/zones/{z['id']}/dns_records",
+                             {"type": "TXT", "name": f"_sbm-check.{zone}", "content": "sbm token check", "ttl": 60})
+        except SbmError as e:
+            raise SbmError(f"Token 没有 DNS 编辑权限（创建 Token 时请用 Edit zone DNS 模板）: {e}")
+        cf_request(token, "DELETE", f"/zones/{z['id']}/dns_records/{rec['id']}")
+        result.append("可以编辑 DNS 记录（已创建并删除测试记录）")
+    return result
+
+
+def domain_check(conf, zone):
+    d = get_domain(conf, zone)
+    return verify_token(zone, read_token(d["token_file"]), write_test=False)
+
+
+def domain_add(conf, zone, token, note=""):
+    zone = (zone or "").strip().lower().rstrip(".")
+    token = (token or "").strip()
+    if not ZONE_RE.match(zone):
+        raise SbmError("域名格式不对，请填主域名，例如 example.com")
+    if any(d["zone"] == zone for d in domains(conf)):
+        raise SbmError(f"域名 {zone} 已经在列表里；要换 Token 请用「更换 Token」")
+    if not TOKEN_RE.match(token):
+        raise SbmError("Token 格式不对，请完整复制 Cloudflare 生成的 API Token")
+    result = verify_token(zone, token)
+    token_file = f"{CF_DIR}/{zone}.ini"
+    write_token(token_file, token)
+    domains(conf).append({"zone": zone, "token_file": token_file, "note": (note or "").strip()[:64],
+                          "added": datetime.now().strftime("%Y-%m-%d %H:%M")})
+    save_conf(conf)
+    return result
+
+
+def domain_set_token(conf, zone, token):
+    """更换 Token：写回原文件，证书续期配置里记录的路径不变，自动用上新 Token。"""
+    d = get_domain(conf, zone)
+    token = (token or "").strip()
+    if not TOKEN_RE.match(token):
+        raise SbmError("Token 格式不对，请完整复制 Cloudflare 生成的 API Token")
+    result = verify_token(zone, token)
+    write_token(d["token_file"], token)
+    return result
+
+
+def domain_set_default(conf, zone):
+    get_domain(conf, zone)
+    conf["base_domain"] = zone
+    save_conf(conf)
+
+
+def domain_del(conf, zone):
+    d = get_domain(conf, zone)
+    used = domain_usage(conf, zone)
+    if used:
+        raise SbmError(f"{zone} 还在使用中（{'、'.join(used)}），不能删除")
+    if base_domain(conf) == zone:
+        raise SbmError("这是默认域名，请先把其他域名设为默认")
+    conf["domains"] = [x for x in domains(conf) if x["zone"] != zone]
+    save_conf(conf)
+    # 只删除 sbm 自己建的 Token 文件
+    if d["token_file"].startswith(CF_DIR + "/") and os.path.exists(d["token_file"]):
+        os.remove(d["token_file"])
+
+
+def cf_upsert_a(zone_name, fqdn, ip, log, token_file):
+    token = read_token(token_file)
+    zid = cf_zone_id(token, zone_name)["id"]
+    record = {"type": "A", "name": fqdn, "content": ip, "ttl": 120, "proxied": False}
+    found = cf_request(token, "GET", f"/zones/{zid}/dns_records?" + urllib.parse.urlencode({"type": "A", "name": fqdn}))
+    if found and found[0]["content"] == ip and not found[0]["proxied"]:
+        log(f"  {fqdn} → {ip} 已存在，无需修改")
+    elif found:
+        cf_request(token, "PUT", f"/zones/{zid}/dns_records/{found[0]['id']}", record)
+        log(f"  已更新 {fqdn} → {ip}（原来指向 {found[0]['content']}）")
+    else:
+        cf_request(token, "POST", f"/zones/{zid}/dns_records", record)
+        log(f"  已添加 {fqdn} → {ip}")
+
+
+def issue_cert(fqdn, log, token_file):
+    # 证书的续期配置会记住 token_file 路径，以后续期自动使用同一个域名的 Token
+    r = subprocess.run(
+        ["certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email",
+         "--dns-cloudflare", "--dns-cloudflare-credentials", token_file,
+         "--dns-cloudflare-propagation-seconds", "30",
+         "--keep-until-expiring", "--cert-name", fqdn, "-d", fqdn],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise SbmError("申请证书失败:\n" + (r.stdout + r.stderr).strip()[-1500:])
+    end = subprocess.run(
+        ["openssl", "x509", "-enddate", "-noout", "-in", f"/etc/letsencrypt/live/{fqdn}/fullchain.pem"],
+        capture_output=True, text=True,
+    ).stdout.strip().replace("notAfter=", "")
+    log(f"  证书有效期至 {end}")
+
+
+def cert_dir(fqdn):
+    return f"/etc/sing-box/certs/{fqdn}"
+
+
+def push_cert(node, log):
+    """证书只在订阅服务器上申请和续期（Cloudflare Token 不下发到节点），续期后推送过去。"""
+    fqdn = node["server"]
+    d = shlex.quote(cert_dir(fqdn))
+    for name, mode in (("fullchain.pem", "644"), ("privkey.pem", "600")):
+        with open(f"/etc/letsencrypt/live/{fqdn}/{name}", encoding="utf-8") as f:
+            pem = f.read()
+        r = ssh(node, f"mkdir -p {d} && umask 077 && cat > {d}/{name}.new && chmod {mode} {d}/{name}.new && mv {d}/{name}.new {d}/{name}", stdin=pem)
+        if r.returncode != 0:
+            raise SbmError(f"上传 {name} 失败: {r.stderr.strip()}")
+    # 如果 sing-box 服务以非 root 用户运行，私钥要归它所有
+    # （不用 systemctl show --value：CentOS 7 的 systemd 219 不支持）
+    ssh(node, f'u=$(systemctl show -p User sing-box | cut -d= -f2-); [ -n "$u" ] && chown -R "$u" {d} || true')
+    log(f"  证书已上传到 {cert_dir(fqdn)}")
+
+
+INSTALL_SCRIPT = r"""
+set -e
+if command -v sing-box >/dev/null; then echo "已安装 $(sing-box version | head -1)"; exit 0; fi
+if ! command -v curl >/dev/null; then
+    (apt-get update -qq && apt-get install -y -qq curl) || dnf install -y curl || yum install -y curl
+fi
+curl -fsSL https://sing-box.app/install.sh | sh >/tmp/sbm-install.log 2>&1 || { tail -20 /tmp/sbm-install.log; exit 1; }
+echo "安装完成 $(sing-box version | head -1)"
+"""
+
+START_SCRIPT = r"""
+set -e
+p=/etc/sing-box/config.json
+mkdir -p /etc/sing-box
+cat > "$p.new"
+sing-box check -c "$p.new"
+if [ -s "$p" ] && ! cmp -s "$p" "$p.new"; then cp -a "$p" "$p.sbm-pre-$(date +%Y%m%d-%H%M%S)"; fi
+mv "$p.new" "$p"
+# 官方服务文件用 User=sing-box + StateDirectory + AmbientCapabilities。
+# 旧 systemd（如 CentOS 7 的 219）不支持后两者，rpm 包也不一定创建该用户，
+# 这时改为以 root 运行并预先建好数据目录（与 Debian/Ubuntu 上手动部署的方式一致）
+sv=$(systemctl --version | awk 'NR==1{print $2}')
+if [ "$sv" -lt 235 ] || ! id sing-box >/dev/null 2>&1; then
+    mkdir -p /etc/systemd/system/sing-box.service.d
+    printf '[Service]\nUser=root\nExecStartPre=/bin/mkdir -p /var/lib/sing-box\n' \
+        > /etc/systemd/system/sing-box.service.d/sbm-compat.conf
+    systemctl daemon-reload
+    echo "systemd $sv：已添加兼容配置，sing-box 以 root 运行"
+fi
+systemctl enable sing-box >/dev/null 2>&1
+systemctl restart sing-box
+sleep 2
+systemctl is-active --quiet sing-box || { journalctl -u sing-box -n 15 --no-pager; exit 1; }
+echo "sing-box 运行中"
+"""
+
+FIREWALL_SCRIPT = r"""
+port={port}
+if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+    ufw allow $port/tcp >/dev/null && echo "ufw 已放行 $port/tcp"
+elif command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
+    firewall-cmd --permanent --add-port=$port/tcp >/dev/null && firewall-cmd --reload >/dev/null && echo "firewalld 已放行 $port/tcp"
+else
+    echo "系统防火墙未启用，无需放行"
+fi
+"""
+
+
+def node_config(node, cred_list, marks):
+    inbound = {
+        "type": "anytls",
+        "tag": node["inbound_tag"],
+        "listen": "::",
+        "listen_port": node["port"],
+        "users": cred_list,
+        "tls": {
+            "enabled": True,
+            "server_name": node["server"],
+            "certificate_path": f"{cert_dir(node['server'])}/fullchain.pem",
+            "key_path": f"{cert_dir(node['server'])}/privkey.pem",
+        },
+    }
+    cfg = {
+        "log": {"level": "info"},
+        "inbounds": [inbound],
+        "outbounds": [{"type": "direct", "tag": "direct"}],
+        "route": {"rules": [{"inbound": [node["inbound_tag"]], "action": "sniff"}]},
+    }
+    apply_stats_routing(cfg, cred_list, marks)
+    return cfg
+
+
+def resolve_ipv4(host):
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        raise SbmError(f"无法解析 {host}")
+
+
+def verify_tls(node, log):
+    r = subprocess.run(
+        ["timeout", "12", "openssl", "s_client", "-connect", f"{node['host']}:{node['port']}",
+         "-servername", node["server"], "-verify_hostname", node["server"]],
+        input="", capture_output=True, text=True,
+    )
+    if "Verify return code: 0 (ok)" in r.stdout:
+        log("  TLS 握手正常，证书有效")
+    else:
+        # 订阅服务器在国内，到境外节点的直连握手可能被干扰，不影响部署结果
+        log("  ⚠ 从订阅服务器验证 TLS 未通过（国内直连境外可能被干扰），请用客户端实际连接确认")
+
+
+def deploy_node(conf, users, name, host, ssh_port, sub, port, zone=None, log=print):
+    """在全新服务器上部署 AnyTLS 节点：DNS → 证书 → 安装 sing-box → 写配置 → 加入订阅。
+    zone 为域名管理里的某个主域名，不指定时用默认域名。"""
+    ssh_port, port = int(ssh_port), int(port)
+    check_node_args(conf, name, host, ssh_port)
+    if not SUB_RE.match(sub or ""):
+        raise SbmError("子域名前缀只能用小写字母、数字和 -")
+    if not 1 <= port <= 65535:
+        raise SbmError("节点端口无效")
+    zone = zone or base_domain(conf)
+    token_file = get_domain(conf, zone)["token_file"]
+    fqdn = f"{sub}.{zone}"
+    if fqdn == conf["sub_domain"] or any(n["server"] == fqdn for n in conf["nodes"]):
+        raise SbmError(f"域名 {fqdn} 已被使用")
+    creds = load_creds()
+    cred_list = node_credentials(users, creds)
+    if not cred_list:
+        raise SbmError("还没有任何账号，请先运行 sbm sync 生成账号池")
+    save_creds(creds)  # node_credentials 可能分配了新的统计编号
+    node = {
+        "name": name, "host": host, "ssh_user": "root", "ssh_port": ssh_port, "ssh_key": KEY,
+        "config_path": "/etc/sing-box/config.json", "inbound_tag": "anytls-in",
+        "server": fqdn, "port": port, "sni": fqdn, "managed": True, "zone": zone,
+    }
+
+    log("[1/7] 检查 SSH 连接")
+    check_root_ssh(node, log)
+    busy = ssh(node, f"ss -Htlnp 'sport = :{port}'").stdout.strip()
+    if busy and "sing-box" not in busy:
+        raise SbmError(f"端口 {port} 已被其他程序占用:\n{busy}")
+
+    log(f"[2/7] 设置 DNS 解析 {fqdn}")
+    cf_upsert_a(zone, fqdn, resolve_ipv4(host), log, token_file)
+
+    log("[3/7] 申请 TLS 证书（DNS 验证，约 1 分钟）")
+    issue_cert(fqdn, log, token_file)
+
+    log("[4/7] 安装 sing-box")
+    log("  " + ssh_ok(node, INSTALL_SCRIPT, "安装 sing-box").splitlines()[-1])
+
+    log("[5/7] 上传证书")
+    push_cert(node, log)
+
+    log("[6/7] 写入配置并启动")
+    r = ssh(node, START_SCRIPT, stdin=json.dumps(node_config(node, cred_list, creds["marks"]), indent=2, ensure_ascii=False) + "\n")
+    if r.returncode != 0:
+        raise SbmError("启动 sing-box 失败:\n" + (r.stdout + r.stderr).strip()[-1500:])
+    for line in r.stdout.strip().splitlines():
+        log("  " + line)
+    log("  " + ssh_ok(node, FIREWALL_SCRIPT.format(port=port), "配置防火墙").splitlines()[-1])
+    # 防火墙重载会清掉计数规则，所以放在它之后安装
+    install_stats(node, cred_list, creds["marks"])
+    log("  已启用流量统计")
+
+    log("[7/7] 验证并加入订阅")
+    verify_tls(node, log)
+    conf["nodes"].append(node)
+    save_conf(conf)
+    build_subs(conf, users)
+    log(f"完成：节点 {name}（{fqdn}:{port}）已加入所有用户的订阅")
+    log(f"提醒：如果云服务商有安全组，请放行 TCP {port}")
+
+
+def attach_node(conf, users, name, host, ssh_port, inbound_tag="anytls-in",
+                config_path="/etc/sing-box/config.json", server=None, log=print):
+    """接入已经装好 sing-box 的服务器：读取它的 AnyTLS 入站，推送用户，加入订阅。"""
+    ssh_port = int(ssh_port)
+    check_node_args(conf, name, host, ssh_port)
+    node = {
+        "name": name, "host": host, "ssh_user": "root", "ssh_port": ssh_port, "ssh_key": KEY,
+        "config_path": config_path, "inbound_tag": inbound_tag, "managed": False,
+    }
+    log("[1/3] 检查 SSH 连接")
+    check_root_ssh(node, log)
+
+    log("[2/3] 读取节点配置")
+    raw = ssh_ok(node, f"cat {shlex.quote(config_path)}", f"读取 {config_path} ")
+    try:
+        cfg = json.loads(raw)
+    except ValueError as e:
+        raise SbmError(f"{config_path} 不是合法的 JSON: {e}")
+    inbound = next((i for i in cfg.get("inbounds", []) if i.get("tag") == inbound_tag), None)
+    if inbound is None:
+        tags = ", ".join(f"{i.get('tag')}({i.get('type')})" for i in cfg.get("inbounds", []))
+        raise SbmError(f"没有 tag 为 {inbound_tag} 的入站。现有入站: {tags or '无'}")
+    if inbound.get("type") != "anytls":
+        raise SbmError(f"入站 {inbound_tag} 的类型是 {inbound.get('type')}，目前只支持 anytls")
+    sni = server or inbound.get("tls", {}).get("server_name")
+    if not sni:
+        raise SbmError("入站 TLS 没有 server_name，请手动填写节点域名")
+    node.update({"server": sni, "sni": sni, "port": int(inbound["listen_port"])})
+    log(f"  AnyTLS 入站：{sni}:{node['port']}，现有 {len(inbound.get('users', []))} 个用户")
+
+    log("[3/3] 推送用户并加入订阅")
+    creds = load_creds()
+    cred_list = node_credentials(users, creds)
+    save_creds(creds)
+    ok, msg = push_node(node, cred_list, creds["marks"])
+    if not ok:
+        raise SbmError(f"推送用户失败:\n{msg}")
+    log(f"  节点 {msg}")
+    conf["nodes"].append(node)
+    save_conf(conf)
+    build_subs(conf, users)
+    log(f"完成：节点 {name} 已加入所有用户的订阅。节点上原有的用户已被 sbm 的用户列表替换")
+
+
+def remove_node(conf, users, name, log=print):
+    """只从管理列表和订阅中移除；服务器、DNS 和证书保持原样。"""
+    if not any(n["name"] == name for n in conf["nodes"]):
+        raise SbmError(f"节点 {name} 不存在")
+    if len(conf["nodes"]) == 1:
+        raise SbmError("这是最后一个节点，移除后订阅将没有可用节点")
+    conf["nodes"] = [n for n in conf["nodes"] if n["name"] != name]
+    save_conf(conf)
+    build_subs(conf, users)
+    log(f"节点 {name} 已从订阅中移除（服务器本身未做改动）")
+
+
+# ---------- sing-box 版本 ----------
+
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$")
+STABLE_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+RELEASE_CACHE = f"{ETC}/.releases.json"
+RELEASE_TTL = 1800  # GitHub 未认证 API 每小时只有 60 次
+
+
+def _github(path):
+    req = urllib.request.Request("https://api.github.com/repos/SagerNet/sing-box" + path,
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "sbm"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.load(resp)
+
+
+def releases(refresh=False):
+    """返回 {"latest": "1.14.3", "stable": [最近的正式版...], "checked": 时间戳}，失败时用缓存。"""
+    cache = load(RELEASE_CACHE, {})
+    if cache and not refresh and time.time() - cache.get("checked", 0) < RELEASE_TTL:
+        return cache
+    try:
+        latest = _github("/releases/latest")["tag_name"].lstrip("v")
+        # 完整的 releases 列表很大，从国内下载容易超时；tags 列表小得多
+        tags = [t["name"] for t in _github("/tags?per_page=60")]
+        stable = sorted({tuple(map(int, m.groups())) for t in tags if (m := STABLE_RE.match(t))}, reverse=True)
+        data = {"latest": latest, "stable": [".".join(map(str, v)) for v in stable[:10]], "checked": time.time()}
+        write_file(RELEASE_CACHE, json.dumps(data) + "\n", 0o600)
+        return data
+    except (OSError, ValueError, KeyError) as e:
+        if cache:
+            return dict(cache, stale=True)
+        raise SbmError(f"无法从 GitHub 获取 sing-box 版本信息: {e}")
+
+
+def node_version(node):
+    r = ssh(node, "sing-box version 2>/dev/null | awk 'NR==1{print $3}'")
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+UPGRADE_SCRIPT = r"""
+set -e
+ver={ver}
+cur=$(sing-box version | awk 'NR==1{{print $3}}')
+if [ "$cur" = "$ver" ]; then echo "已是 $ver，无需升级"; exit 0; fi
+if dpkg -s sing-box >/dev/null 2>&1; then
+    kind=deb; f="sing-box_${{ver}}_linux_$(dpkg --print-architecture).deb"
+elif rpm -q sing-box >/dev/null 2>&1; then
+    kind=rpm; f="sing-box_${{ver}}_linux_$(rpm --eval %_arch).rpm"
+else
+    kind=bin
+    case $(uname -m) in
+        x86_64) a=amd64 ;; aarch64) a=arm64 ;; armv7l) a=armv7 ;; i?86) a=386 ;;
+        *) echo "不支持的架构 $(uname -m)"; exit 1 ;;
+    esac
+    f="sing-box-${{ver}}-linux-$a.tar.gz"
+fi
+url="https://github.com/SagerNet/sing-box/releases/download/v$ver/$f"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+echo "下载 $f"
+curl -fsSL --retry 2 --max-time 300 -o "$tmp/$f" "$url" || {{ echo "下载失败: $url"; exit 1; }}
+bin=$(command -v sing-box)
+cp -a "$bin" "$tmp/sing-box.prev"
+cp -a /etc/sing-box/config.json "$tmp/config.json"
+case $kind in
+    # --force-confold：保留已修改的 /etc/sing-box/config.json，避免 dpkg 停下来交互询问
+    deb) DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold --force-confdef "$tmp/$f" >"$tmp/log" 2>&1 \
+            || {{ tail -15 "$tmp/log"; exit 1; }} ;;
+    rpm) rpm -U --force --oldpackage "$tmp/$f" >"$tmp/log" 2>&1 || {{ tail -15 "$tmp/log"; exit 1; }} ;;
+    bin) tar -xzf "$tmp/$f" -C "$tmp" && install -m 755 "$tmp"/sing-box-*/sing-box "$bin" ;;
+esac
+echo "已安装 $kind 包"
+# 包管理器可能替换或另存配置文件，始终换回原来的配置
+cmp -s "$tmp/config.json" /etc/sing-box/config.json || cp -a "$tmp/config.json" /etc/sing-box/config.json
+systemctl daemon-reload
+rollback() {{
+    install -m 755 "$tmp/sing-box.prev" "$bin"
+    systemctl restart sing-box
+    echo "已回滚到 $cur（包管理器里记录的版本可能仍显示为 $ver）"
+    exit 1
+}}
+sing-box check -c /etc/sing-box/config.json || {{ echo "新版本无法通过当前配置的校验"; rollback; }}
+systemctl restart sing-box
+sleep 2
+systemctl is-active --quiet sing-box || {{ journalctl -u sing-box -n 10 --no-pager; rollback; }}
+echo "升级完成: $cur → $(sing-box version | awk 'NR==1{{print $3}}')"
+"""
+
+
+def upgrade_nodes(conf, names, version=None, log=print):
+    """逐个升级节点（每个节点会重启一次）。一个失败不影响其他节点，最后汇总。"""
+    version = version or releases()["latest"]
+    if not VERSION_RE.match(version):
+        raise SbmError(f"版本号格式不对: {version}")
+    targets = [n for n in conf["nodes"] if n["name"] in names]
+    missing = set(names) - {n["name"] for n in targets}
+    if missing:
+        raise SbmError(f"节点不存在: {', '.join(sorted(missing))}")
+    failed = []
+    for i, node in enumerate(targets, 1):
+        log(f"[{i}/{len(targets)}] {node['name']} → {version}")
+        r = ssh(node, UPGRADE_SCRIPT.format(ver=version))
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            log("  " + line)
+        if r.returncode != 0:
+            failed.append(node["name"])
+            log(f"  ✗ {node['name']} 升级失败")
+    if failed:
+        raise SbmError(f"以下节点升级失败: {', '.join(failed)}")
+    log(f"完成：{len(targets)} 个节点均为 {version}")
+
+
+def cert_renewed(conf, domains, log=print):
+    """certbot 续期钩子：把续期后的证书推送到对应节点并重启 sing-box。"""
+    for node in conf["nodes"]:
+        if node.get("managed") and node["server"] in domains:
+            push_cert(node, log)
+            ssh_ok(node, "systemctl restart sing-box", "重启 sing-box")
+            log(f"[{node['name']}] 已重启 sing-box")
+
+
+# ---------- 订阅 ----------
+
+def outbound_singbox(node, user):
+    return {
+        "type": "anytls",
+        "tag": node["name"],
+        "server": node["server"],
+        "server_port": node["port"],
+        "password": user["password"],
+        "tls": {
+            "enabled": True,
+            "server_name": node["sni"],
+            "utls": {"enabled": True, "fingerprint": "chrome"},
+        },
+    }
+
+
+def build_singbox(conf, user):
+    nodes = conf["nodes"]
+    rule_set_url = "https://raw.githubusercontent.com/SagerNet/{repo}/rule-set/{tag}.srs"
+    return {
+        "log": {"level": "warn"},
+        "dns": {
+            "servers": [
+                {"type": "https", "tag": "remote", "server": "1.1.1.1", "detour": "proxy"},
+                {"type": "https", "tag": "local", "server": "223.5.5.5"},
+            ],
+            "rules": [{"rule_set": "geosite-cn", "server": "local"}],
+            "final": "remote",
+            "strategy": "prefer_ipv4",
+        },
+        "inbounds": [{
+            "type": "tun",
+            "tag": "tun-in",
+            "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+            "auto_route": True,
+            "strict_route": True,
+        }],
+        "outbounds": [
+            {"type": "selector", "tag": "proxy", "outbounds": [n["name"] for n in nodes] + ["direct"]},
+            *[outbound_singbox(n, user) for n in nodes],
+            {"type": "direct", "tag": "direct"},
+        ],
+        "route": {
+            "rules": [
+                {"action": "sniff"},
+                {"protocol": "dns", "action": "hijack-dns"},
+                {"ip_is_private": True, "outbound": "direct"},
+                {"rule_set": ["geosite-cn", "geoip-cn"], "outbound": "direct"},
+            ],
+            "rule_set": [
+                {"type": "remote", "tag": "geosite-cn", "format": "binary",
+                 "url": rule_set_url.format(repo="sing-geosite", tag="geosite-cn"), "download_detour": "proxy"},
+                {"type": "remote", "tag": "geoip-cn", "format": "binary",
+                 "url": rule_set_url.format(repo="sing-geoip", tag="geoip-cn"), "download_detour": "proxy"},
+            ],
+            "final": "proxy",
+            "auto_detect_interface": True,
+            "default_domain_resolver": "local",
+        },
+        "experimental": {"cache_file": {"enabled": True}},
+    }
+
+
+def q(s):
+    # JSON 字符串同时也是合法的 YAML 字符串
+    return json.dumps(s, ensure_ascii=False)
+
+
+def build_clash(conf, user):
+    lines = [
+        "mixed-port: 7890",
+        "allow-lan: false",
+        "mode: rule",
+        "log-level: warning",
+        "ipv6: false",
+        "unified-delay: true",
+        "geodata-mode: true",
+        "dns:",
+        "  enable: true",
+        "  enhanced-mode: fake-ip",
+        "  fake-ip-range: 198.18.0.1/16",
+        "  default-nameserver: [223.5.5.5, 119.29.29.29]",
+        "  nameserver: [https://dns.alidns.com/dns-query, https://doh.pub/dns-query]",
+        "  nameserver-policy:",
+        "    \"geosite:geolocation-!cn\": [\"https://1.1.1.1/dns-query#PROXY\"]",
+        "proxies:",
+    ]
+    for n in conf["nodes"]:
+        lines += [
+            f"  - name: {q(n['name'])}",
+            "    type: anytls",
+            f"    server: {q(n['server'])}",
+            f"    port: {n['port']}",
+            f"    password: {q(user['password'])}",
+            f"    sni: {q(n['sni'])}",
+            "    client-fingerprint: chrome",
+            "    skip-cert-verify: false",
+            "    udp: true",
+        ]
+    lines += [
+        "proxy-groups:",
+        "  - name: PROXY",
+        "    type: select",
+        "    proxies: [" + ", ".join(q(n["name"]) for n in conf["nodes"]) + ", DIRECT]",
+        "rules:",
+        "  - GEOSITE,private,DIRECT",
+        "  - GEOIP,private,DIRECT,no-resolve",
+        "  - GEOSITE,cn,DIRECT",
+        "  - GEOIP,CN,DIRECT",
+        "  - MATCH,PROXY",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def build_uri(conf, user):
+    links = []
+    for n in conf["nodes"]:
+        pw = urllib.parse.quote(user["password"], safe="")
+        params = urllib.parse.urlencode({"sni": n["sni"]})
+        links.append(f"anytls://{pw}@{n['server']}:{n['port']}/?{params}#{urllib.parse.quote(n['name'])}")
+    return base64.b64encode("\n".join(links).encode()).decode() + "\n"
+
+
+GUIDE_TPL = "/usr/local/share/sbm/guide.tpl.html"
+
+
+def _qr_svg(text):
+    try:
+        import qrcode
+        import qrcode.image.svg
+    except ImportError:
+        return ""
+    img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    return img.to_string(encoding="unicode")
+
+
+def build_guide(conf, user):
+    """用户专属的使用说明页：下载、一键导入、操作步骤，与订阅放在同一个令牌目录下。"""
+    if not os.path.exists(GUIDE_TPL):
+        return None
+    base = f"https://{conf['sub_domain']}:{conf['sub_port']}"
+    sub = f"{base}/s/{user['token']}"
+    profile = urllib.parse.quote(conf.get("profile_name", "sub"))
+    links = {"universal": sub, "singbox": f"{sub}?t=singbox", "clash": f"{sub}?t=clash", "uri": f"{sub}?t=uri"}
+    data = {
+        "name": user["name"],
+        "links": links,
+        "imports": {
+            "singbox": f"sing-box://import-remote-profile?url={urllib.parse.quote(links['singbox'], safe='')}#{profile}",
+            "clash": f"clash://install-config?url={urllib.parse.quote(links['clash'], safe='')}&name={profile}",
+            "shadowrocket": "shadowrocket://add/sub://" + base64.b64encode(links["uri"].encode()).decode() + f"?remark={profile}",
+            "hiddify": f"hiddify://import/{sub}#{profile}",
+        },
+        "nodes": [n["name"] for n in conf["nodes"]],
+        "qr_guide": _qr_svg(f"{base}/u/{user['token']}"),
+        "qr_sub": _qr_svg(sub),
+    }
+    with open(GUIDE_TPL, encoding="utf-8") as f:
+        tpl = f.read()
+    # 防止数据里的 </script> 提前结束脚本
+    return tpl.replace("/*SBM_DATA*/null", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
+
+
+def build_subs(conf, users):
+    os.makedirs(WWW, exist_ok=True)
+    keep = set()
+    for u in users:
+        if not u["enabled"]:
+            continue
+        keep.add(u["token"])
+        d = os.path.join(WWW, u["token"])
+        os.makedirs(d, mode=0o755, exist_ok=True)
+        write_file(f"{d}/singbox.json", json.dumps(build_singbox(conf, u), indent=2, ensure_ascii=False) + "\n")
+        write_file(f"{d}/clash.yaml", build_clash(conf, u))
+        write_file(f"{d}/uri.txt", build_uri(conf, u))
+        guide = build_guide(conf, u)
+        if guide:
+            write_file(f"{d}/guide.html", guide)
+    # 删除已删除、已停用或已重置用户的旧订阅目录
+    for name in os.listdir(WWW):
+        if name not in keep:
+            shutil.rmtree(os.path.join(WWW, name), ignore_errors=True)
+
+
+def sub_links(conf, user):
+    base = f"https://{conf['sub_domain']}:{conf['sub_port']}/s/{user['token']}"
+    return {
+        "使用说明页（发给用户这一个就够）": f"https://{conf['sub_domain']}:{conf['sub_port']}/u/{user['token']}",
+        "通用（按客户端自动识别）": base,
+        "sing-box / Hiddify": f"{base}?t=singbox",
+        "Clash Meta / Mihomo": f"{base}?t=clash",
+        "Shadowrocket / 通用链接": f"{base}?t=uri",
+        "sing-box 一键导入": "sing-box://import-remote-profile?url="
+                             + urllib.parse.quote(f"{base}?t=singbox", safe="")
+                             + "#" + urllib.parse.quote(conf.get("profile_name", "sub")),
+    }
+
+
+# ---------- 账号池与用户操作 ----------
+
+CREDS = f"{ETC}/creds.json"
+POOL_SIZE = 20
+
+
+def load_creds():
+    creds = load(CREDS, {})
+    for key in ("spares", "retiring", "dirty"):
+        creds.setdefault(key, [])
+    return creds
+
+
+def save_creds(creds):
+    write_file(CREDS, json.dumps(creds, indent=2, ensure_ascii=False) + "\n", 0o600)
+
+
+def pool_size(conf):
+    return int(conf.get("pool_size", POOL_SIZE))
+
+
+def new_cred(password=None):
+    return {"name": "s-" + secrets.token_hex(5), "password": password or rand(24)}
+
+
+def node_credentials(users, creds):
+    """节点上应有的全部账号：启用用户 + 备用账号 + 待清理账号。
+    按账号名排序：集合不变时配置文件逐字节不变，push_node 判断为 UNCHANGED，节点不会重启。
+    同时给还没有统计编号的账号分配编号（写入 creds["marks"]，调用方负责保存）。"""
+    items = {u["cred"]: u["password"] for u in users if u["enabled"]}
+    for c in creds["spares"] + creds["retiring"]:
+        items.setdefault(c["name"], c["password"])
+    marks = creds.setdefault("marks", {})
+    for name in sorted(items):
+        if name not in marks:
+            # 编号只增不复用，避免旧账号残留的计数被算到新账号头上
+            creds["next_mark"] = creds.get("next_mark", 1)
+            marks[name] = MARK_BASE + creds["next_mark"]
+            creds["next_mark"] += 1
+    return [{"name": k, "password": v} for k, v in sorted(items.items())]
+
+
+def prune_marks(creds, cred_list):
+    """维护清理账号后，去掉已不在节点上的账号编号。"""
+    keep = {c["name"] for c in cred_list}
+    creds["marks"] = {k: v for k, v in creds.get("marks", {}).items() if k in keep}
+
+
+def get_user(users, name):
+    for u in users:
+        if u["name"] == name:
+            return u
+    raise SbmError(f"用户 {name} 不存在")
+
+
+def pending_purge(creds, user):
+    """停用的用户，其账号是否还留在节点上等待清理。"""
+    return not user["enabled"] and any(r["name"] == user["cred"] for r in creds["retiring"])
+
+
+def retire(creds, user, reason):
+    """把启用用户的账号移到待清理列表：订阅立即失效，节点上的账号等维护时再删。"""
+    if user["enabled"]:
+        creds["retiring"].append({
+            "name": user["cred"], "password": user["password"], "user": user["name"], "uid": user["id"],
+            "reason": reason, "since": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        })
+
+
+def assign_cred(creds, user, password=None):
+    """给用户分配节点账号。优先用账号池里的（节点上已经有，不用重启）；
+    池空了或指定了密码时新建一个，返回 True 表示需要推送节点。"""
+    if creds["spares"] and not password:
+        c, need_push = creds["spares"].pop(0), False
+    else:
+        c, need_push = new_cred(password), True
+    user["cred"], user["password"] = c["name"], c["password"]
+    return need_push
+
+
+# 以下用户操作只修改内存中的 users / creds，返回 (是否需要推送节点, 给管理员的提示)；
+# 由 commit() 统一保存并决定是否推送。
+
+def user_add(users, creds, name, note="", password=None):
+    if not NAME_RE.match(name or ""):
+        raise SbmError("用户名只能包含字母、数字、_ . -，最长 32 位")
+    if any(u["name"] == name for u in users):
+        raise SbmError(f"用户 {name} 已存在")
+    u = {"id": secrets.token_hex(6), "name": name, "note": note, "token": rand(32), "enabled": True,
+         "created": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    need_push = assign_cred(creds, u, password)
+    users.append(u)
+    return need_push, ("账号池已用完，本次新建账号需要重启节点" if need_push and not password else "")
+
+
+def user_delete(users, creds, name, now=False):
+    u = get_user(users, name)
+    retire(creds, u, "删除")
+    users.remove(u)
+    return now, "" if now else "订阅已失效；节点上的账号将在下次维护时清理"
+
+
+def user_disable(users, creds, name, now=False):
+    u = get_user(users, name)
+    if not u["enabled"]:
+        return now, ""
+    retire(creds, u, "停用")
+    u["enabled"] = False
+    return now, "" if now else "订阅已失效；节点上的账号将在下次维护时清理"
+
+
+def user_enable(users, creds, name):
+    u = get_user(users, name)
+    if u["enabled"]:
+        return False, ""
+    u["enabled"] = True
+    for i, r in enumerate(creds["retiring"]):
+        if r["name"] == u["cred"] and r["password"] == u["password"]:
+            # 旧账号还没被清理，直接恢复，密码和订阅都不变
+            creds["retiring"].pop(i)
+            return False, ""
+    need_push = assign_cred(creds, u)
+    return need_push, "原账号已在节点上清理，已分配新密码：订阅链接不变，用户需要在客户端更新一次订阅"
+
+
+def user_reset(users, creds, name, now=True):
+    u = get_user(users, name)
+    u["token"] = rand(32)
+    if not u["enabled"]:
+        # 停用的用户不占节点账号，重新启用时会分配
+        return False, "已更换订阅链接"
+    retire(creds, u, "重置")
+    need_push = assign_cred(creds, u)
+    return need_push or now, "" if now else "旧密码将在下次维护时失效"
+
+
+def reconcile(conf, users, creds, log=print):
+    """完整整理：清理待删除账号、补满账号池、推送到所有节点（只有配置变化的节点会重启）。"""
+    target = pool_size(conf)
+    # 先把各节点的计数收上来：待清理账号的最后一段流量要在它们被删之前记到用户名下
+    try:
+        collect(conf, users, creds, log=lambda *_: None)
+    except Exception as e:  # noqa: BLE001 - 统计失败不能阻止推送账号
+        log(f"⚠ 流量统计采集失败（不影响本次同步）: {e}")
+    while len(creds["spares"]) < target:
+        creds["spares"].append(new_cred())
+    purged = len(creds["retiring"])
+    creds["retiring"] = []
+    cred_list = node_credentials(users, creds)
+    if not cred_list:
+        raise SbmError("没有任何账号可以推送")
+    prune_marks(creds, cred_list)
+    dirty = []
+    for node in conf["nodes"]:
+        success, msg = push_node(node, cred_list, creds["marks"])
+        log(f"[{node['name']}] {'成功' if success else '失败'}: {msg}")
+        if not success:
+            dirty.append(node["name"])
+    creds["dirty"] = dirty
+    save_creds(creds)
+    build_subs(conf, users)
+    log(f"已清理 {purged} 个旧账号，账号池 {len(creds['spares'])}/{target}"
+        + (f"；未同步成功: {', '.join(dirty)}（下次维护会重试）" if dirty else ""))
+    return not dirty
+
+
+def commit(conf, users, creds, need_push, log=print):
+    save_users(users)
+    if need_push:
+        return reconcile(conf, users, creds, log)
+    save_creds(creds)
+    build_subs(conf, users)
+    log("已生效，节点无需重启")
+    return True
+
+
+# ---------- 流量统计（采集与查询） ----------
+# 每 5 分钟（sbm traffic collect，systemd 定时器）读取各节点计数器，算出增量，
+# 按 日期 × 用户 id × 节点 累加到 SQLite。计数器变小视为被清零（节点重启、防火墙重载），按新值计。
+
+TRAFFIC_DB = f"{ETC}/traffic.db"
+USERINFO_MAP = "/etc/nginx/sbm-userinfo.map"
+NODE_READ = "[ -x /usr/local/sbin/sbm-stats ] || exit 3; /usr/local/sbin/sbm-stats apply >/dev/null 2>&1; /usr/local/sbin/sbm-stats read"
+
+
+def traffic_db():
+    con = sqlite3.connect(TRAFFIC_DB, timeout=30)
+    con.executescript("""
+        CREATE TABLE IF NOT EXISTS last (node TEXT, fam TEXT, dir TEXT, mark INTEGER, bytes INTEGER,
+                                         PRIMARY KEY (node, fam, dir, mark));
+        CREATE TABLE IF NOT EXISTS usage (day TEXT, uid TEXT, node TEXT, up INTEGER DEFAULT 0, down INTEGER DEFAULT 0,
+                                          PRIMARY KEY (day, uid, node));
+        CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+    """)
+    os.chmod(TRAFFIC_DB, 0o600)
+    return con
+
+
+def mark_owners(users, creds):
+    """统计编号 → 用户 id。备用账号没有主人；已删除用户的待清理账号用记录里的 uid。"""
+    marks = creds.get("marks", {})
+    owners = {}
+    for r in creds["retiring"]:
+        if r["name"] in marks and r.get("uid"):
+            owners[marks[r["name"]]] = r["uid"]
+    for u in users:
+        if u["cred"] in marks and (u["enabled"] or pending_purge(creds, u)):
+            owners[marks[u["cred"]]] = u["id"]
+    return owners
+
+
+def _read_node(node):
+    r = ssh(node, NODE_READ)
+    if r.returncode == 3:
+        return node["name"], None, "尚未启用统计"
+    if r.returncode != 0:
+        return node["name"], None, (r.stderr.strip() or "读取失败")[-200:]
+    rows = []
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and parts[1] in ("up", "down"):
+            try:
+                rows.append((parts[0], parts[1], int(parts[2], 16), int(parts[3])))
+            except ValueError:
+                pass
+    return node["name"], rows, ""
+
+
+def collect(conf, users=None, creds=None, log=print):
+    """采集一次各节点的计数并入库。返回 {节点: 状态}。"""
+    users = users if users is not None else load_users()
+    creds = creds if creds is not None else load_creds()
+    owners = mark_owners(users, creds)
+    day = datetime.now().strftime("%Y-%m-%d")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(_read_node, conf["nodes"]))
+    status = {}
+    con = traffic_db()
+    with con:
+        for node_name, rows, err in results:
+            if rows is None:
+                status[node_name] = {"ok": False, "error": err}
+                log(f"[{node_name}] {err}")
+                continue
+            added = 0
+            for fam, direction, mark, value in rows:
+                prev = con.execute("SELECT bytes FROM last WHERE node=? AND fam=? AND dir=? AND mark=?",
+                                   (node_name, fam, direction, mark)).fetchone()
+                delta = value if prev is None or value < prev[0] else value - prev[0]
+                con.execute("INSERT OR REPLACE INTO last VALUES (?,?,?,?,?)", (node_name, fam, direction, mark, value))
+                uid = owners.get(mark)
+                if uid and delta:
+                    col = "up" if direction == "up" else "down"
+                    con.execute(f"INSERT INTO usage (day, uid, node, {col}) VALUES (?,?,?,?) "
+                                f"ON CONFLICT (day, uid, node) DO UPDATE SET {col} = {col} + excluded.{col}",
+                                (day, uid, node_name, delta))
+                    added += delta
+            status[node_name] = {"ok": True, "error": ""}
+            log(f"[{node_name}] 新增 {fmt_bytes(added)}")
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('collected', ?)", (datetime.now().strftime("%Y-%m-%d %H:%M"),))
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('status', ?)", (json.dumps(status, ensure_ascii=False),))
+    con.close()
+    return status
+
+
+def fmt_bytes(n):
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}"
+        n /= 1024
+
+
+def month_usage(con, month):
+    """某月（YYYY-MM）每个用户的 (上传, 下载)。"""
+    return {uid: (up, down) for uid, up, down in con.execute(
+        "SELECT uid, SUM(up), SUM(down) FROM usage WHERE day LIKE ? GROUP BY uid", (month + "-%",))}
+
+
+def traffic_summary(conf):
+    """控制台首页需要的统计：本月每个用户、今日每个节点、本月合计、上次采集时间与各节点状态。"""
+    if not os.path.exists(TRAFFIC_DB):
+        return {"enabled": False, "users": {}, "nodes_today": {}, "month_total": [0, 0], "collected": "", "status": {}}
+    con = traffic_db()
+    today = datetime.now().strftime("%Y-%m-%d")
+    users = {uid: [up, down] for uid, (up, down) in month_usage(con, today[:7]).items()}
+    nodes = {n: [up, down] for n, up, down in con.execute(
+        "SELECT node, SUM(up), SUM(down) FROM usage WHERE day = ? GROUP BY node", (today,))}
+    meta = dict(con.execute("SELECT k, v FROM meta"))
+    con.close()
+    return {
+        "enabled": True,
+        "users": users,
+        "nodes_today": nodes,
+        "month_total": [sum(v[0] for v in users.values()), sum(v[1] for v in users.values())],
+        "collected": meta.get("collected", ""),
+        "status": json.loads(meta.get("status", "{}")),
+    }
+
+
+def traffic_detail(uid, days=30):
+    """单个用户：最近 days 天每日流量、本月各节点分布、本月/上月/累计。"""
+    con = traffic_db()
+    today = datetime.now().date()
+    start = (today - timedelta(days=days - 1)).isoformat()
+    rows = {d: (up, down) for d, up, down in con.execute(
+        "SELECT day, SUM(up), SUM(down) FROM usage WHERE uid = ? AND day >= ? GROUP BY day", (uid, start))}
+    daily = []
+    for i in range(days):
+        d = (today - timedelta(days=days - 1 - i)).isoformat()
+        up, down = rows.get(d, (0, 0))
+        daily.append({"day": d, "up": up, "down": down})
+    month = today.strftime("%Y-%m")
+    last_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    by_node = [{"node": n, "up": up, "down": down} for n, up, down in con.execute(
+        "SELECT node, SUM(up), SUM(down) FROM usage WHERE uid = ? AND day LIKE ? GROUP BY node ORDER BY SUM(up + down) DESC",
+        (uid, month + "-%"))]
+
+    def total(where, args):
+        up, down = con.execute(f"SELECT COALESCE(SUM(up),0), COALESCE(SUM(down),0) FROM usage WHERE uid = ? {where}",
+                               (uid, *args)).fetchone()
+        return [up, down]
+    result = {
+        "daily": daily, "by_node": by_node,
+        "month": total("AND day LIKE ?", (month + "-%",)),
+        "last_month": total("AND day LIKE ?", (last_month + "-%",)),
+        "all": total("", ()),
+    }
+    con.close()
+    return result
+
+
+def write_userinfo_map(conf, users):
+    """生成 Nginx 的 token → subscription-userinfo 映射，客户端据此显示本月已用流量。
+    内容有变化时返回 True（调用方负责重载 Nginx）。"""
+    con = traffic_db()
+    usage = month_usage(con, datetime.now().strftime("%Y-%m"))
+    con.close()
+    lines = []
+    for u in users:
+        if u["enabled"]:
+            up, down = usage.get(u["id"], (0, 0))
+            lines.append(f'{u["token"]} "upload={up}; download={down}; total=0; expire=0";\n')
+    text = "".join(lines)
+    try:
+        with open(USERINFO_MAP, encoding="utf-8") as f:
+            if f.read() == text:
+                return False
+    except FileNotFoundError:
+        pass
+    write_file(USERINFO_MAP, text, 0o644)
+    return True
+
+
+# ---------- 命令 ----------
+
+def cmd_user(args, conf):
+    users, creds = load_users(), load_creds()
+    if args.action == "list":
+        print(f"{'用户':<20}{'状态':<14}{'节点账号':<16}创建时间")
+        for u in users:
+            status = "启用" if u["enabled"] else ("停用·待清理" if pending_purge(creds, u) else "停用")
+            print(f"{u['name']:<20}{status:<14}{u['cred']:<16}{u['created']}")
+        print(f"\n账号池 {len(creds['spares'])}/{pool_size(conf)}，待清理 {len(creds['retiring'])} 个")
+        return
+    if args.action == "show":
+        try:
+            u = get_user(users, args.name)
+        except SbmError as e:
+            die(str(e))
+        print(f"用户: {u['name']}  状态: {'启用' if u['enabled'] else '停用'}")
+        for label, link in sub_links(conf, u).items():
+            print(f"  {label}:\n    {link}")
+        return
+    try:
+        if args.action == "add":
+            need_push, notice = user_add(users, creds, args.name, args.note or "", args.password)
+        elif args.action == "del":
+            need_push, notice = user_delete(users, creds, args.name, args.now)
+        elif args.action == "disable":
+            need_push, notice = user_disable(users, creds, args.name, args.now)
+        elif args.action == "enable":
+            need_push, notice = user_enable(users, creds, args.name)
+        else:  # reset
+            need_push, notice = user_reset(users, creds, args.name, not args.later)
+        ok = commit(conf, users, creds, need_push)
+    except SbmError as e:
+        die(str(e))
+    if notice:
+        print(notice)
+    if args.action in ("add", "reset", "enable") and ok:
+        u = get_user(users, args.name)
+        for label, link in sub_links(conf, u).items():
+            print(f"  {label}:\n    {link}")
+    sys.exit(0 if ok else 1)
+
+
+def cmd_domain(args, conf):
+    try:
+        if args.action == "list":
+            default = base_domain(conf)
+            print(f"{'域名':<26}{'默认':<6}{'用途':<36}备注")
+            for d in domains(conf):
+                used = "、".join(domain_usage(conf, d["zone"])) or "未使用"
+                print(f"{d['zone']:<26}{'✓' if d['zone'] == default else '':<6}{used:<36}{d.get('note', '')}")
+            return
+        if not args.zone:
+            die("需要指定域名")
+        if args.action == "check":
+            for line in domain_check(conf, args.zone):
+                print("✓ " + line)
+        elif args.action in ("add", "token"):
+            # Token 从隐藏输入读取，不出现在命令行参数和 shell 历史里
+            import getpass
+            token = getpass.getpass("Cloudflare API Token（输入时不显示）: ")
+            lines = (domain_add(conf, args.zone, token, args.note or "") if args.action == "add"
+                     else domain_set_token(conf, args.zone, token))
+            for line in lines:
+                print("✓ " + line)
+            print(f"已保存 {args.zone} 的 Token")
+        elif args.action == "default":
+            domain_set_default(conf, args.zone)
+            print(f"默认域名已改为 {args.zone}")
+        elif args.action == "del":
+            domain_del(conf, args.zone)
+            print(f"已删除 {args.zone}")
+    except SbmError as e:
+        die(str(e))
+
+
+def cmd_traffic(args, conf):
+    if args.action == "collect":
+        with locked():
+            raw = load(USERS, [])
+            users = load_users()
+            if any("id" not in u for u in raw):
+                save_users(users)  # 老用户第一次补上固定 id
+            collect(conf, users, load_creds(), log=print if args.verbose else (lambda *_: None))
+            if write_userinfo_map(conf, users):
+                subprocess.run(["systemctl", "reload", "nginx"], check=False)
+        return
+    summary = traffic_summary(conf)
+    if not summary["enabled"]:
+        die("还没有流量数据，请先运行 sbm sync 启用统计")
+    month = datetime.now().strftime("%Y-%m")
+    print(f"{month} 本月流量（更新于 {summary['collected']}）\n")
+    print(f"{'用户':<20}{'上传':>12}{'下载':>12}{'合计':>12}")
+    for u in load_users():
+        up, down = summary["users"].get(u["id"], [0, 0])
+        print(f"{u['name']:<20}{fmt_bytes(up):>12}{fmt_bytes(down):>12}{fmt_bytes(up + down):>12}")
+    up, down = summary["month_total"]
+    print(f"{'合计':<20}{fmt_bytes(up):>12}{fmt_bytes(down):>12}{fmt_bytes(up + down):>12}")
+    bad = {n: s["error"] for n, s in summary["status"].items() if not s["ok"]}
+    if bad:
+        print("\n采集失败的节点: " + "; ".join(f"{n}（{e}）" for n, e in bad.items()))
+
+
+def cmd_pool(conf):
+    creds = load_creds()
+    print(f"备用账号: {len(creds['spares'])}/{pool_size(conf)}")
+    print(f"待清理账号: {len(creds['retiring'])}")
+    for r in creds["retiring"]:
+        print(f"  {r['user']:<20}{r['reason']:<6}{r['since']}")
+    if creds["dirty"]:
+        print(f"未同步成功的节点: {', '.join(creds['dirty'])}")
+    r = subprocess.run(["systemctl", "list-timers", "sbm-maintain.timer", "--no-pager"],
+                       capture_output=True, text=True)
+    nxt = r.stdout.splitlines()[1:2]
+    print(f"下次维护: {nxt[0].split('  ')[0] if nxt else '未设置定时任务'}")
+
+
+def cmd_status(conf):
+    for node in conf["nodes"]:
+        r = ssh(node, "systemctl is-active sing-box; sing-box version | head -1")
+        print(f"[{node['name']}] {node['host']}: {' / '.join(r.stdout.split(chr(10))[:2]) or r.stderr.strip()}")
+
+
+def cmd_node(args, conf):
+    users = load_users()
+    if args.action == "list":
+        print(f"{'节点':<18}{'类型':<8}{'服务器':<18}地址")
+        for n in conf["nodes"]:
+            kind = "部署" if n.get("managed") else "接入"
+            print(f"{n['name']:<18}{kind:<8}{n['host']:<18}{n['server']}:{n['port']}")
+        return
+    if args.action == "pubkey":
+        print("在新服务器上以 root 运行下面这条命令，授权订阅服务器管理它：\n")
+        print(authorize_command(conf))
+        return
+    if args.action == "versions":
+        try:
+            rel = releases(refresh=True)
+        except SbmError as e:
+            die(str(e))
+        print(f"sing-box 最新正式版: {rel['latest']}{'（GitHub 连不上，用的是缓存）' if rel.get('stale') else ''}")
+        print(f"近期正式版: {', '.join(rel['stable'])}\n")
+        for n in conf["nodes"]:
+            v = node_version(n) or "无法连接"
+            print(f"  {n['name']:<18}{v:<12}{'✓ 最新' if v == rel['latest'] else '可升级'}")
+        return
+    if args.action == "upgrade":
+        names = [n["name"] for n in conf["nodes"]] if args.all else ([args.name] if args.name else [])
+        if not names:
+            die("指定节点名，或用 --all 升级全部节点")
+        try:
+            upgrade_nodes(conf, names, args.version)
+        except SbmError as e:
+            die(str(e))
+        return
+    if not args.name:
+        die("需要指定节点名")
+    try:
+        if args.action == "deploy":
+            if not (args.host and args.sub):
+                die("deploy 需要 --host 和 --sub")
+            deploy_node(conf, users, args.name, args.host, args.ssh_port, args.sub, args.port, args.zone)
+        elif args.action == "attach":
+            if not args.host:
+                die("attach 需要 --host")
+            attach_node(conf, users, args.name, args.host, args.ssh_port, args.inbound_tag,
+                        args.config_path, args.server)
+        elif args.action == "del":
+            remove_node(conf, users, args.name)
+    except SbmError as e:
+        die(str(e))
+
+
+def main():
+    if os.geteuid() != 0:
+        die("请用 sudo 运行")
+    p = argparse.ArgumentParser(prog="sbm", description="sing-box 用户与订阅管理")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pu = sub.add_parser("user", help="用户管理", description=(
+        "add / enable：使用账号池，立即生效，节点不重启\n"
+        "del / disable：订阅立即失效，节点账号在每天维护时清理；加 --now 立即踢下线（重启节点）\n"
+        "reset：默认立即让旧密码失效（重启节点）；加 --later 改为维护时失效"),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    pu.add_argument("action", choices=["list", "add", "del", "enable", "disable", "reset", "show"])
+    pu.add_argument("name", nargs="?")
+    pu.add_argument("--password", help="add: 指定密码（不走账号池，需要重启节点）")
+    pu.add_argument("--note", help="add: 备注")
+    pu.add_argument("--now", action="store_true", help="del/disable: 立即踢下线（重启节点）")
+    pu.add_argument("--later", action="store_true", help="reset: 旧密码在下次维护时才失效（不重启）")
+    pn = sub.add_parser("node", help="节点管理", description=(
+        "deploy: 在全新服务器上一键部署（自动 DNS、证书、安装 sing-box）\n"
+        "attach: 接入已装好 sing-box 且有 AnyTLS 入站的服务器\n"
+        "versions: 查看各节点 sing-box 版本和最新版本\n"
+        "upgrade: 升级 sing-box，例如 sbm node upgrade --all 或 sbm node upgrade HK-01 --version 1.14.3\n"
+        "先运行 sbm node pubkey，把输出的命令在新服务器上以 root 执行一次"),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    pn.add_argument("action", choices=["list", "pubkey", "deploy", "attach", "del", "versions", "upgrade"])
+    pn.add_argument("--all", action="store_true", help="upgrade: 升级全部节点")
+    pn.add_argument("--version", help="upgrade: 目标版本（默认最新正式版）")
+    pn.add_argument("name", nargs="?")
+    pn.add_argument("--host", help="服务器 IP")
+    pn.add_argument("--ssh-port", type=int, default=22)
+    pn.add_argument("--sub", help="deploy: 子域名前缀，例如 hk1 → hk1.<主域名>")
+    pn.add_argument("--zone", help="deploy: 使用域名管理里的哪个主域名（默认用默认域名）")
+    pn.add_argument("--port", type=int, default=443, help="deploy: AnyTLS 端口（默认 443）")
+    pn.add_argument("--inbound-tag", default="anytls-in", help="attach: 入站 tag")
+    pn.add_argument("--config-path", default="/etc/sing-box/config.json", help="attach: 配置文件路径")
+    pn.add_argument("--server", help="attach: 节点域名（默认读取入站的 server_name）")
+    pd = sub.add_parser("domain", help="节点域名与 Cloudflare Token 管理", description=(
+        "list: 列出域名、默认域名和用途\n"
+        "add <域名>: 添加域名，随后提示输入 Cloudflare Token（会验证 DNS 编辑权限）\n"
+        "token <域名>: 更换 Token；check <域名>: 检测 Token 是否可用\n"
+        "default <域名>: 设为部署节点时的默认域名；del <域名>: 删除未使用的域名"),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    pd.add_argument("action", choices=["list", "add", "token", "check", "default", "del"])
+    pd.add_argument("zone", nargs="?")
+    pd.add_argument("--note", help="add: 备注")
+    sub.add_parser("sync", help="维护：清理旧账号、补满账号池并推送到所有节点（只有变化的节点会重启）")
+    sub.add_parser("pool", help="查看账号池和待清理账号")
+    pt = sub.add_parser("traffic", help="流量统计：sbm traffic 查看本月；sbm traffic collect 采集一次（定时器使用）")
+    pt.add_argument("action", nargs="?", choices=["show", "collect"], default="show")
+    pt.add_argument("-v", "--verbose", action="store_true", help="collect: 显示每个节点的采集结果")
+    sub.add_parser("build", help="只重新生成订阅，不改节点")
+    sub.add_parser("status", help="查看节点状态")
+    pc = sub.add_parser("cert-renewed", help="certbot 续期钩子使用")
+    pc.add_argument("domains", nargs="*")
+    args = p.parse_args()
+
+    conf = load(CONF)
+    if args.cmd == "node":
+        if args.action in ("list", "pubkey", "versions"):
+            cmd_node(args, conf)
+        else:
+            with locked():
+                cmd_node(args, load(CONF))
+    elif args.cmd == "domain":
+        if args.action in ("list", "check"):
+            cmd_domain(args, conf)
+        else:
+            with locked():
+                cmd_domain(args, load(CONF))
+    elif args.cmd == "cert-renewed":
+        renewed = args.domains or os.environ.get("RENEWED_DOMAINS", "").split()
+        with locked():
+            try:
+                cert_renewed(load(CONF), renewed)
+            except SbmError as e:
+                die(str(e))
+    elif args.cmd == "user":
+        if args.action != "list" and not args.name:
+            die("需要指定用户名")
+        with locked():
+            cmd_user(args, conf)
+    elif args.cmd == "sync":
+        with locked():
+            users = load_users()
+            save_users(users)
+            try:
+                sys.exit(0 if reconcile(load(CONF), users, load_creds()) else 1)
+            except SbmError as e:
+                die(str(e))
+    elif args.cmd == "pool":
+        cmd_pool(conf)
+    elif args.cmd == "traffic":
+        cmd_traffic(args, conf)
+    elif args.cmd == "build":
+        build_subs(conf, load_users())
+        print("订阅已生成")
+    elif args.cmd == "status":
+        cmd_status(conf)
+
+
+if __name__ == "__main__":
+    main()

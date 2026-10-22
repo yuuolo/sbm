@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>使用说明</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bd6'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f5fa; --surface: #fff; --surface-2: #f8f9fc; --border: #e6e8f0;
+  --text: #1b1d29; --muted: #6b7084; --accent: #5b5bd6; --accent-soft: #eeeefc; --accent-text: #fff;
+  --ok: #18a058; --ok-soft: #e6f6ed; --warn: #b26205; --warn-soft: #fdf3e2;
+  --shadow: 0 1px 2px rgba(20,22,40,.04), 0 8px 24px rgba(20,22,40,.06);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1017; --surface: #171923; --surface-2: #1d202c; --border: #2a2d3c;
+    --text: #e8e9f1; --muted: #9196ab; --accent: #8f8ff2; --accent-soft: #23234a; --accent-text: #0f1017;
+    --ok: #3ccf82; --ok-soft: #12301f; --warn: #f0a83a; --warn-soft: #33260f;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1017; --surface: #171923; --surface-2: #1d202c; --border: #2a2d3c;
+  --text: #e8e9f1; --muted: #9196ab; --accent: #8f8ff2; --accent-soft: #23234a; --accent-text: #0f1017;
+  --ok: #3ccf82; --ok-soft: #12301f; --warn: #f0a83a; --warn-soft: #33260f;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+.wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+.top { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+.logo { width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, var(--accent), #2bb5a0); display: grid; place-items: center; flex: none; }
+.top h1 { font-size: 21px; margin: 0; }
+.top p { margin: 0; color: var(--muted); font-size: 13px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px 20px; box-shadow: var(--shadow); margin-bottom: 16px; }
+.card h2 { font-size: 17px; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
+.num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; font-size: 13px; font-weight: 700; flex: none; }
+.alert { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 14px; margin-bottom: 16px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.tabs button { border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: 99px; padding: 5px 14px; cursor: pointer; font: inherit; font-size: 14px; }
+.tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.pane { display: none; }
+.pane.on { display: block; }
+.app { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin-bottom: 10px; background: var(--surface-2); }
+.app b { font-size: 15px; }
+.app .tag { display: inline-block; margin-left: 6px; font-size: 11.5px; padding: 0 7px; border-radius: 99px; background: var(--ok-soft); color: var(--ok); font-weight: 600; vertical-align: 1px; }
+.app p { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; }
+.app a { color: var(--accent); }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0 14px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn:active { transform: translateY(1px); }
+ol.steps { padding-left: 22px; margin: 0; }
+ol.steps li { margin: 6px 0; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+.qr-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.qr { flex: 1 1 200px; text-align: center; }
+.qr .img { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 8px; max-width: 200px; margin: 0 auto; }
+.qr .img svg { width: 100%; height: auto; display: block; }
+.qr p { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.link-box { display: flex; gap: 8px; align-items: stretch; margin-top: 8px; }
+.link-box code { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; color: var(--muted); }
+.nodes { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.nodes span { background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 2px 10px; font-size: 13.5px; font-weight: 600; }
+details { border-bottom: 1px solid var(--border); padding: 10px 0; }
+details:last-child { border-bottom: none; }
+summary { cursor: pointer; font-weight: 600; }
+details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 18px; border-radius: 99px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+@media (max-width: 520px) { .actions .btn { flex: 1 1 100%; } .card { padding: 16px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="logo"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
+    <div><h1>使用说明</h1><p id="who"></p></div>
+  </div>
+
+  <div class="alert">这个页面和里面的链接<b>只属于你一个人</b>，请不要转发或截图给别人。链接泄露请联系管理员重置。</div>
+
+  <div class="card">
+    <h2><span class="num">1</span>安装客户端</h2>
+    <div class="tabs" id="osTabs">
+      <button data-os="ios">iPhone / iPad</button>
+      <button data-os="android">Android</button>
+      <button data-os="windows">Windows</button>
+      <button data-os="mac">macOS</button>
+    </div>
+    <div class="pane" data-os="ios">
+      <div class="app"><b>Shadowrocket</b><span class="tag">推荐</span><p>App Store 付费下载。中国区 App Store 没有上架，需要使用其他地区的 Apple ID。</p></div>
+      <div class="app"><b>sing-box</b><p>App Store 免费下载（名称 sing-box VT），同样需要非中国区 Apple ID。</p></div>
+    </div>
+    <div class="pane" data-os="android">
+      <div class="app"><b>Hiddify</b><span class="tag">推荐</span><p>免费开源。Google Play 搜索 Hiddify，或在 <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>Android-universal.apk</code>。</p></div>
+      <div class="app"><b>sing-box (SFA)</b><p>官方客户端。Google Play 或 <a href="https://github.com/SagerNet/sing-box/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>SFA-版本号-universal.apk</code>。</p></div>
+      <div class="app"><b>FlClash / Clash Meta for Android</b><p>Clash 系客户端，<a href="https://github.com/chen08209/FlClash/releases" target="_blank" rel="noopener">FlClash 下载</a>。</p></div>
+    </div>
+    <div class="pane" data-os="windows">
+      <div class="app"><b>Clash Verge Rev</b><span class="tag">推荐</span><p>免费开源，在 <a href="https://github.com/clash-verge-rev/clash-verge-rev/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>x64-setup.exe</code> 安装。</p></div>
+      <div class="app"><b>Hiddify</b><p>在 <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 Windows 安装包。</p></div>
+    </div>
+    <div class="pane" data-os="mac">
+      <div class="app"><b>Clash Verge Rev</b><span class="tag">推荐</span><p>在 <a href="https://github.com/clash-verge-rev/clash-verge-rev/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>.dmg</code>（Apple 芯片选 aarch64，Intel 选 x64）。</p></div>
+      <div class="app"><b>sing-box</b><p>Mac App Store 免费下载（需要非中国区 Apple ID）。</p></div>
+      <div class="app"><b>Hiddify</b><p>在 <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 macOS 安装包。</p></div>
+    </div>
+    <p class="hint">请安装<b>最新版本</b>。本服务使用 AnyTLS 协议，旧版本客户端可能无法识别节点。</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">2</span>导入订阅</h2>
+    <div class="tabs" id="appTabs">
+      <button data-app="shadowrocket">Shadowrocket</button>
+      <button data-app="singbox">sing-box</button>
+      <button data-app="clash">Clash Verge Rev</button>
+      <button data-app="flclash">FlClash / Clash Meta</button>
+      <button data-app="hiddify">Hiddify</button>
+    </div>
+
+    <div class="pane" data-app="shadowrocket">
+      <div class="actions">
+        <a class="btn primary" data-import="shadowrocket">一键导入 Shadowrocket</a>
+        <button class="btn" data-copy="uri">复制订阅链接</button>
+      </div>
+      <ol class="steps">
+        <li>在 iPhone 上点「一键导入」，会自动打开 Shadowrocket 添加订阅。</li>
+        <li>没反应的话：点「复制订阅链接」，打开 Shadowrocket → 首页右上角 <b>＋</b> → 类型选 <b>Subscribe</b> → 在 URL 里粘贴 → 右上角「完成」。</li>
+        <li>在列表里点选一个节点，打开顶部的开关。第一次会提示添加 VPN 配置，选择「允许」。</li>
+      </ol>
+    </div>
+
+    <div class="pane" data-app="singbox">
+      <div class="actions">
+        <a class="btn primary" data-import="singbox">一键导入 sing-box</a>
+        <button class="btn" data-copy="singbox">复制订阅链接</button>
+      </div>
+      <ol class="steps">
+        <li>点「一键导入」，在 sing-box 里确认导入。</li>
+        <li>没反应的话：复制订阅链接 → 打开 sing-box → <b>配置（Profiles）</b> → <b>新建配置</b> → 类型选 <b>远程（Remote）</b> → 粘贴链接 → 打开「自动更新」→ 保存。</li>
+        <li>回到 <b>仪表盘（Dashboard）</b>，选中这个配置，点 <b>启用（Enable）</b>，允许添加 VPN。</li>
+        <li>在 <b>分组（Groups）</b> 里可以切换节点。</li>
+      </ol>
+    </div>
+
+    <div class="pane" data-app="clash">
+      <div class="actions">
+        <a class="btn primary" data-import="clash">一键导入 Clash Verge</a>
+        <button class="btn" data-copy="clash">复制订阅链接</button>
+      </div>
+      <ol class="steps">
+        <li>先打开 Clash Verge Rev，再点「一键导入」，浏览器询问是否打开应用时选择允许。</li>
+        <li>没反应的话：复制订阅链接 → Clash Verge Rev 左侧 <b>订阅</b> → 顶部输入框粘贴 → 点 <b>导入</b>。</li>
+        <li>点一下刚导入的订阅卡片，让它处于选中状态。</li>
+        <li>左侧 <b>代理</b> → 在 <b>PROXY</b> 分组里选一个节点。</li>
+        <li>左侧 <b>设置</b> → 打开 <b>系统代理</b>。部分软件不走系统代理时，可以改为打开 <b>虚拟网卡模式（TUN）</b>。</li>
+      </ol>
+    </div>
+
+    <div class="pane" data-app="flclash">
+      <div class="actions">
+        <a class="btn primary" data-import="clash">一键导入</a>
+        <button class="btn" data-copy="clash">复制订阅链接</button>
+      </div>
+      <ol class="steps">
+        <li>点「一键导入」，在应用里确认。</li>
+        <li>没反应的话：复制订阅链接 → <b>配置</b> → 右下角 <b>＋</b> → <b>URL</b> → 粘贴链接 → 提交。</li>
+        <li>选中这个配置，回到首页点 <b>启动</b>，允许添加 VPN。</li>
+        <li>在 <b>代理</b> 页的 PROXY 分组里切换节点。</li>
+      </ol>
+    </div>
+
+    <div class="pane" data-app="hiddify">
+      <div class="actions">
+        <a class="btn primary" data-import="hiddify">一键导入 Hiddify</a>
+        <button class="btn" data-copy="universal">复制订阅链接</button>
+      </div>
+      <ol class="steps">
+        <li>点「一键导入」，在 Hiddify 里确认。</li>
+        <li>没反应的话：复制订阅链接 → 打开 Hiddify → 点 <b>＋（新建配置）</b> → <b>从剪贴板添加</b>。</li>
+        <li>点首页中间的大圆按钮连接；在 <b>代理</b> 页可以切换节点。</li>
+      </ol>
+    </div>
+
+    <p class="hint">不同版本的客户端按钮名称可能略有差异，找意思相近的即可。</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">3</span>在电脑上看这个页面？</h2>
+    <div class="qr-row">
+      <div class="qr"><div class="img" id="qrGuide"></div><p>手机扫码打开本页，<br>再点上面的「一键导入」</p></div>
+      <div class="qr"><div class="img" id="qrSub"></div><p>Shadowrocket 等客户端<br>可以直接扫码添加订阅</p></div>
+    </div>
+    <div class="link-box"><code id="subText"></code><button class="btn" data-copy="universal">复制</button></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">4</span>连接与节点</h2>
+    <p>订阅里包含以下节点，任选一个即可；速度慢或连不上时换一个试试：</p>
+    <div class="nodes" id="nodes"></div>
+    <p class="hint">国内网站和应用会自动直连，不受影响。客户端会每隔一段时间自动更新订阅，管理员新增节点后你无需任何操作。</p>
+  </div>
+
+  <div class="card">
+    <h2>常见问题</h2>
+    <details><summary>导入失败，或订阅链接打不开</summary><p>请确认链接复制完整（包括域名后面冒号和端口号）。如果打开显示 404，说明链接已失效（账号被停用或重置），请联系管理员获取新的使用说明页。</p></details>
+    <details><summary>已经连接，但打不开网页</summary><p>先在客户端里<b>更新订阅</b>，再换一个节点试试。仍然不行，请确认客户端是最新版本，或联系管理员。</p></details>
+    <details><summary>怎么手动更新订阅？</summary><p>Shadowrocket：首页下拉刷新，或左滑订阅点「更新」。sing-box：配置 → 选中配置 → 更新。Clash Verge Rev：订阅页点卡片上的刷新图标。Hiddify：首页配置名称旁的刷新按钮。</p></details>
+    <details><summary>可以在多台设备上使用吗？</summary><p>可以，你自己的手机、电脑都用这一个链接导入即可。请不要分享给其他人。</p></details>
+    <details><summary>突然断开几秒后又恢复了？</summary><p>管理员维护节点时会短暂断开，客户端会自动重连，正在进行的下载可能需要重试。</p></details>
+  </div>
+</div>
+<div class="toast" id="toast">已复制</div>
+
+<script>
+"use strict";
+const DATA = /*SBM_DATA*/null;
+const $ = (s) => document.querySelector(s);
+
+$("#who").textContent = `${DATA.name} 专属`;
+document.title = `使用说明 · ${DATA.name}`;
+$("#qrGuide").innerHTML = DATA.qr_guide;
+$("#qrSub").innerHTML = DATA.qr_sub;
+$("#subText").textContent = DATA.links.universal;
+DATA.nodes.forEach((n) => { const s = document.createElement("span"); s.textContent = n; $("#nodes").appendChild(s); });
+document.querySelectorAll("[data-import]").forEach((a) => { a.href = DATA.imports[a.dataset.import]; });
+
+function tabs(group, attr, initial) {
+  const btns = document.querySelectorAll(`#${group} button`);
+  const show = (v) => {
+    btns.forEach((b) => b.classList.toggle("on", b.dataset[attr] === v));
+    document.querySelectorAll(`.pane[data-${attr}]`).forEach((p) => p.classList.toggle("on", p.dataset[attr] === v));
+  };
+  btns.forEach((b) => (b.onclick = () => show(b.dataset[attr])));
+  show(initial);
+}
+
+// 按设备类型默认选中对应的系统和推荐客户端
+const ua = navigator.userAgent;
+const os = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? "ios"
+  : /Android/.test(ua) ? "android" : /Macintosh|Mac OS X/.test(ua) ? "mac" : "windows";
+tabs("osTabs", "os", os);
+tabs("appTabs", "app", { ios: "shadowrocket", android: "hiddify", windows: "clash", mac: "clash" }[os]);
+
+let toastTimer;
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const t = document.createElement("textarea");
+    t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove();
+  }
+  $("#toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("#toast").classList.remove("show"), 1500);
+}
+document.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = () => copy(DATA.links[b.dataset.copy])));
+</script>
+</body>
+</html>

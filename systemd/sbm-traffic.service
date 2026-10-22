@@ -1,0 +1,8 @@
+[Unit]
+Description=sbm 流量统计采集：读取各节点计数器并入库，更新客户端显示的已用流量
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sbm traffic collect

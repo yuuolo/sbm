@@ -1,0 +1,9 @@
+[Unit]
+Description=sbm 每日维护：清理已删除/停用用户的节点账号，补满账号池
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# 只有账号有变化的节点会重启；没有变化时什么都不做
+ExecStart=/usr/local/bin/sbm sync

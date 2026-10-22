@@ -1,0 +1,15 @@
+# 运行时数据和密钥绝不提交
+*.ini
+*.db
+*.pem
+*.key
+*.htpasswd
+sbm_node
+sbm_node.pub
+config.json
+users.json
+creds.json
+*.bak*
+__pycache__/
+*.pyc
+.DS_Store

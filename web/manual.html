@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>sbm 管理手册</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bd6'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f5fa; --surface: #ffffff; --surface-2: #f8f9fc; --border: #e6e8f0;
+  --text: #1b1d29; --muted: #6b7084; --accent: #5b5bd6; --accent-soft: #eeeefc;
+  --ok: #18a058; --ok-soft: #e6f6ed; --warn: #b26205; --warn-soft: #fdf3e2; --danger: #dc3545; --danger-soft: #fdeced;
+  --code-bg: #f1f2f7; --shadow: 0 1px 2px rgba(20,22,40,.04), 0 8px 24px rgba(20,22,40,.06);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1017; --surface: #171923; --surface-2: #1d202c; --border: #2a2d3c;
+    --text: #e8e9f1; --muted: #9196ab; --accent: #8f8ff2; --accent-soft: #23234a;
+    --ok: #3ccf82; --ok-soft: #12301f; --warn: #f0a83a; --warn-soft: #33260f; --danger: #ff6b78; --danger-soft: #3a1a1f;
+    --code-bg: #1d202c; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1017; --surface: #171923; --surface-2: #1d202c; --border: #2a2d3c;
+  --text: #e8e9f1; --muted: #9196ab; --accent: #8f8ff2; --accent-soft: #23234a;
+  --ok: #3ccf82; --ok-soft: #12301f; --warn: #f0a83a; --warn-soft: #33260f; --danger: #ff6b78; --danger-soft: #3a1a1f;
+  --code-bg: #1d202c; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+.layout { max-width: 1120px; margin: 0 auto; padding: 24px 16px 80px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; }
+nav.toc { position: sticky; top: 16px; align-self: start; max-height: calc(100vh - 32px); overflow: auto; font-size: 13.5px; }
+nav.toc a { display: block; color: var(--muted); text-decoration: none; padding: 4px 10px; border-left: 2px solid transparent; }
+nav.toc a:hover { color: var(--text); }
+nav.toc a.sub { padding-left: 22px; font-size: 13px; }
+nav.toc .back { display: inline-flex; margin-bottom: 14px; color: var(--accent); border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px; background: var(--surface); }
+main { min-width: 0; }
+header.hero { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px 28px; box-shadow: var(--shadow); margin-bottom: 28px; }
+header.hero h1 { margin: 0 0 4px; font-size: 26px; }
+header.hero p { margin: 0; color: var(--muted); }
+section { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 8px 28px 22px; box-shadow: var(--shadow); margin-bottom: 22px; }
+h2 { font-size: 20px; margin: 22px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 16px; margin: 22px 0 6px; }
+p, li { margin: 6px 0; }
+ul, ol { padding-left: 22px; }
+code { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 1px 6px; border-radius: 5px; }
+pre { background: #0f1017; color: #d6d8e6; border-radius: 10px; padding: 12px 14px; overflow-x: auto; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+pre code { background: none; padding: 0; color: inherit; }
+pre .c { color: #7f849c; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface-2); color: var(--muted); font-weight: 600; font-size: 13px; }
+.table-wrap { overflow-x: auto; }
+.note, .warn, .tip { border-radius: 10px; padding: 10px 14px; margin: 12px 0; font-size: 14px; }
+.note { background: var(--accent-soft); }
+.tip { background: var(--ok-soft); }
+.warn { background: var(--warn-soft); color: var(--warn); }
+.note b, .tip b { color: var(--text); }
+.tag { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 99px; font-weight: 600; }
+.tag.ok { background: var(--ok-soft); color: var(--ok); }
+.tag.bad { background: var(--danger-soft); color: var(--danger); }
+.arch { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 10px; align-items: center; margin: 14px 0; text-align: center; font-size: 13.5px; }
+.arch .box { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--surface-2); }
+.arch .box b { display: block; font-size: 14.5px; }
+.arch .box span { color: var(--muted); font-size: 12.5px; }
+.arch .arrow { color: var(--muted); font-size: 12px; }
+kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; background: var(--surface-2); }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  nav.toc { position: static; max-height: none; }
+  nav.toc a.sub { display: none; }
+  section, header.hero { padding-left: 16px; padding-right: 16px; }
+  .arch { grid-template-columns: 1fr; }
+  .arch .arrow { transform: rotate(90deg); }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc">
+  <a class="back" href="./">← 返回控制台</a>
+  <a href="#overview">1. 系统概览</a>
+  <a href="#users">2. 用户管理</a>
+  <a class="sub" href="#add">新增用户并发给对方</a>
+  <a class="sub" href="#lifecycle">停用、删除、重置</a>
+  <a class="sub" href="#pool">账号池与每日维护</a>
+  <a href="#traffic">流量统计</a>
+  <a href="#nodes">3. 节点管理</a>
+  <a class="sub" href="#deploy">一键部署新服务器</a>
+  <a class="sub" href="#attach">接入已有节点</a>
+  <a class="sub" href="#status">状态卡片怎么看</a>
+  <a class="sub" href="#upgrade">升级 sing-box</a>
+  <a href="#certs">4. 证书与域名</a>
+  <a class="sub" href="#domains">多个域名与 Token</a>
+  <a href="#cli">5. 命令行参考</a>
+  <a href="#trouble">6. 故障排查</a>
+  <a href="#backup">7. 备份与恢复</a>
+  <a href="#security">8. 安全建议</a>
+</nav>
+
+<main>
+<header class="hero">
+  <h1>sbm 管理手册</h1>
+  <p>sing-box 节点、用户与订阅的管理说明。网页控制台能完成日常的所有操作，命令行作为补充。</p>
+</header>
+
+<section id="overview">
+<h2>1. 系统概览</h2>
+<div class="arch">
+  <div class="box"><b>订阅服务器</b><span>{{SUB_DOMAIN}}:{{SUB_PORT}}<br>管理控制台 · 订阅 · 每日维护</span></div>
+  <div class="arrow">SSH 密钥<br>→ 管理</div>
+  <div class="box"><b>sing-box 节点</b><span>AnyTLS · 443 端口<br>可以有多个</span></div>
+  <div class="arrow">← 连接</div>
+  <div class="box"><b>用户设备</b><span>Shadowrocket / sing-box<br>Clash / Hiddify</span></div>
+</div>
+<ul>
+  <li><b>订阅服务器</b>保存所有用户和节点信息，生成每个用户的订阅文件，并通过 SSH 把账号推送到各节点。用户的流量<b>不经过</b>订阅服务器。</li>
+  <li><b>节点</b>只负责转发流量。节点上的账号列表由订阅服务器统一管理，不要在节点上手动改 <code>/etc/sing-box/config.json</code> 的 <code>users</code>，下次同步会被覆盖。</li>
+  <li><b>用户</b>只需要一个链接（使用说明页），里面有订阅链接和各客户端的导入方法。客户端每 12 小时自动更新订阅，新增节点后用户无需任何操作。</li>
+</ul>
+<div class="note"><b>为什么不用 443 端口：</b>订阅服务器如果在中国大陆，未备案的域名不能使用 80/443 端口，所以订阅和控制台默认使用 8443（当前为 {{SUB_PORT}}）。云服务商的安全组必须放行这个 TCP 端口。</div>
+</section>
+
+<section id="users">
+<h2>2. 用户管理</h2>
+
+<h3 id="add">新增用户并发给对方</h3>
+<ol>
+  <li>控制台右上角点 <b>新增用户</b>，填用户名（字母、数字、<code>_ . -</code>）和备注，点创建。</li>
+  <li>会自动弹出订阅窗口。第一项 <b>使用说明页</b> 就是要发给对方的链接：对方打开后能看到下载哪个客户端、一键导入按钮和操作步骤。</li>
+  <li>对方用手机的话，也可以直接扫窗口右侧的二维码。</li>
+</ol>
+<div class="tip"><b>新增用户立即生效，节点不重启。</b>新用户使用的是账号池里的备用账号，这些账号早已在节点上，所以不影响任何正在使用的人。</div>
+<p>以后要再次查看某个用户的链接，在用户列表里点 <b>订阅</b> 即可。备注可以随时点击修改，不会影响节点。</p>
+
+<h3 id="lifecycle">停用、删除、重置</h3>
+<div class="table-wrap"><table>
+  <tr><th>操作</th><th>订阅链接</th><th>节点上的账号</th><th>节点是否重启</th><th>适用场景</th></tr>
+  <tr><td><b>停用</b>（开关）</td><td>立即失效</td><td>凌晨维护时清理</td><td><span class="tag ok">不重启</span>（勾「立即踢下线」则重启）</td><td>暂停使用，之后可能恢复</td></tr>
+  <tr><td><b>重新启用</b></td><td>恢复，链接不变</td><td>旧账号还在就直接恢复</td><td><span class="tag ok">不重启</span></td><td>恢复之前停用的人</td></tr>
+  <tr><td><b>删除</b></td><td>立即失效</td><td>凌晨维护时清理</td><td><span class="tag ok">不重启</span>（勾「立即踢下线」则重启）</td><td>不再使用</td></tr>
+  <tr><td><b>重置</b></td><td>换成新链接，旧链接立即失效</td><td>默认立即失效</td><td><span class="tag bad">默认重启</span>（取消勾选则凌晨失效）</td><td>链接泄露、被转发给别人</td></tr>
+</table></div>
+<div class="warn"><b>注意：</b>停用或删除时如果没有勾选「立即踢下线」，对方设备上<b>已经导入的配置</b>在当晚维护前仍然能连接（订阅更新不了，但已有配置还能用）。需要马上断开的，务必勾选。</div>
+<p>停用的用户在列表中显示 <b>停用 · 待清理</b> 表示账号还留在节点上；维护后变为 <b>停用</b>。已清理的用户重新启用时，会分配新的账号密码，订阅链接不变，但对方需要在客户端<b>更新一次订阅</b>。</p>
+
+<h3 id="pool">账号池与每日维护</h3>
+<p>sing-box 只在启动时读取用户列表，改动用户就必须重启，会让所有人断线几秒。为避免这一点，节点上始终预置了 20 个备用账号（用户列表标题旁的「账号池 19/20」）：</p>
+<ul>
+  <li>新增用户：从账号池取一个，节点不变。</li>
+  <li>停用/删除：账号先留在节点上（「待清理」），订阅立即失效。</li>
+  <li>每天 <b>04:00（北京时间）</b> 自动维护：清理待清理账号、把账号池补满 20 个，并推送到节点。<b>只有账号有变化的节点会重启</b>，没变化的不动。</li>
+</ul>
+<p>账号池用完（一天内新增超过 20 人）时，新增用户会提示需要重启节点，同时把账号池补满。想马上清理，可以点控制台顶部的 <b>同步节点</b>，效果和夜间维护一样。</p>
+</section>
+
+<section id="traffic">
+<h2>流量统计</h2>
+<ul>
+  <li><b>控制台：</b>顶部「本月流量」卡片是所有用户本月合计；用户列表的「本月流量」点一下可看该用户最近 30 天每日流量图、本月各节点分布、上月和累计；节点卡片显示该节点今日流量。</li>
+  <li><b>客户端：</b>订阅响应带有 <code>subscription-userinfo</code>，Clash、Shadowrocket、Hiddify 等更新订阅后会显示本月已用流量（没有设置上限，所以不显示剩余）。</li>
+  <li><b>更新频率：</b>每 5 分钟采集一次（定时任务 <code>sbm-traffic.timer</code>），按北京时间的自然日、自然月统计。</li>
+</ul>
+<h3>统计口径</h3>
+<p>统计的是<b>节点与目标网站之间</b>的流量，即用户实际上传、下载的数据（包含 TCP/TLS 包头，比文件本身大约多 1%~5%）。不包含客户端到节点那段 AnyTLS 加密的额外开销，所以会比服务商后台的服务器总流量略小。节点上其他程序产生的流量不计入任何用户。</p>
+<h3>原理（排查问题时参考）</h3>
+<p>官方 sing-box 没有按用户计数的功能。sbm 给每个节点账号生成一个专属出站（<code>sbm-u-账号名</code>，带唯一的 <code>routing_mark</code>）和一条按 <code>auth_user</code> 分流的路由规则；节点上的 <code>/usr/local/sbin/sbm-stats</code> 用 iptables 的 mangle 表（<code>SBM_OUT</code> / <code>SBM_IN</code> 链）按编号计数。这些出站和规则追加在节点原有规则之后，不要手动删除；如果节点上有自定义的分流规则，被它们分走的流量不会计入用户。</p>
+<ul>
+  <li>节点重启或防火墙重载（如 CentOS 的 <code>firewall-cmd --reload</code>）会清掉计数规则，下次采集时自动补回，最多丢失几分钟的数据。</li>
+  <li>节点卡片显示「统计异常」时，鼠标悬停可看原因；在节点上运行 <code>/usr/local/sbin/sbm-stats read</code> 可看原始计数。</li>
+  <li>数据保存在订阅服务器的 <code>/etc/sbm/traffic.db</code>（已包含在第 7 节的备份命令里）。</li>
+</ul>
+<p>命令行：<code>sudo sbm traffic</code> 查看本月各用户流量；<code>sudo sbm traffic collect -v</code> 立即采集一次。</p>
+</section>
+
+<section id="nodes">
+<h2>3. 节点管理</h2>
+
+<h3 id="deploy">一键部署新服务器</h3>
+<p>适合刚买的空白 VPS（Debian、Ubuntu、CentOS 等）。全程约 1~2 分钟：</p>
+<ol>
+  <li>在服务商控制台的<b>安全组/防火墙</b>里放行 SSH 端口和节点端口（默认 TCP 443）。</li>
+  <li>控制台 → 节点 → <b>添加节点</b> → 「一键部署新服务器」。复制第 1 步显示的<b>授权命令</b>，用 root 登录新服务器运行一次。它只添加一把公钥，并限制只能从订阅服务器登录。</li>
+  <li>填写节点名称（显示在用户客户端里，如 <code>HK-01</code>）、服务器 IP、SSH 端口、节点域名前缀，并在下拉框选择主域名（如 <code>hk1</code> + <code>.{{BASE_DOMAIN}}</code>）。主域名在「域名管理」里增删，见第 4 节。</li>
+  <li>点开始，在日志窗口里看进度：设置 DNS → 申请证书 → 安装 sing-box → 写入配置 → 验证。</li>
+</ol>
+<p>完成后节点自动加入所有人的订阅，现有节点不受影响。部署失败可以直接重试，已经完成的步骤会自动跳过。</p>
+<div class="note"><b>最后一步提示「TLS 验证未通过」不一定是失败：</b>订阅服务器在国内，直连境外节点可能被干扰。用客户端实际连一下确认即可。</div>
+
+<h3 id="attach">接入已有节点</h3>
+<p>服务器上已经自己配好了 sing-box 和 AnyTLS 入站时使用。同样先运行授权命令，然后在「接入已有 sing-box」里填写信息。<b>节点上原有的 AnyTLS 用户会被替换</b>成控制台的账号列表。</p>
+
+<h3>移除节点</h3>
+<p>节点卡片上的 <b>移除</b> 只是让它不再出现在订阅中、不再受管理。服务器上的 sing-box、DNS 解析和证书都保持原样，需要的话请自行清理或退订服务器。最后一个节点不能移除。</p>
+
+<h3 id="status">状态卡片怎么看</h3>
+<div class="table-wrap"><table>
+  <tr><th>项目</th><th>含义</th></tr>
+  <tr><td>运行中 / 已停止 / 无法连接</td><td>sing-box 服务状态；「无法连接」表示订阅服务器 SSH 不上这台机器</td></tr>
+  <tr><td>待同步</td><td>上次推送账号失败（比如当时宕机），部分新用户可能连不上这个节点。下次维护或点「同步节点」会重试</td></tr>
+  <tr><td>部署 / 接入</td><td>部署：由本系统安装，证书由订阅服务器续期；接入：外部配置，证书由节点自己管理</td></tr>
+  <tr><td>CPU 负载</td><td>最近 1 分钟平均负载 ÷ CPU 核数。100% 表示所有核满载，超过 100% 说明有任务在排队。鼠标悬停可看原始数值</td></tr>
+  <tr><td>内存</td><td>实际占用（不含可随时释放的缓存）占总内存的比例</td></tr>
+  <tr><td>已运行 / 开机时长</td><td>sing-box 本次启动以来的时间 / 服务器本身开机以来的时间</td></tr>
+</table></div>
+<p>进度条颜色：绿色 &lt; 60%，黄色 60~85%，红色 &gt; 85%。长期红色说明该换更大的机器或增加节点分流。</p>
+
+<h3 id="upgrade">升级 sing-box</h3>
+<p>节点卡片显示黄色「可升级到 x.y.z」时，可以点卡片上的升级按钮，或点 <b>版本管理</b> 一次选择多个节点、选择目标版本（也能回退到旧版本）。</p>
+<ul>
+  <li>升级会自动识别安装方式（deb / rpm / 程序文件），从 sing-box 官方 GitHub 下载。</li>
+  <li>升级前备份配置和旧程序；新版本校验配置失败或启动失败会<b>自动回滚</b>。</li>
+  <li>每个节点升级时会重启一次，建议在用户少的时候操作。</li>
+</ul>
+</section>
+
+<section id="certs">
+<h2>4. 证书与域名</h2>
+<div class="table-wrap"><table>
+  <tr><th>证书</th><th>谁负责续期</th><th>续期后</th></tr>
+  <tr><td><code>{{SUB_DOMAIN}}</code>（订阅/控制台）</td><td>订阅服务器的 certbot，Cloudflare DNS 验证</td><td>自动重载 Nginx</td></tr>
+  <tr><td>一键部署的节点（如 <code>hk1.{{BASE_DOMAIN}}</code>）</td><td>订阅服务器的 certbot，用所选主域名的 Cloudflare Token 做 DNS 验证</td><td>自动推送到节点并重启 sing-box</td></tr>
+  <tr><td>接入的节点（外部配置）</td><td>节点自己</td><td>需要确保续期后重启 sing-box，可安装仓库 <code>contrib/certbot-restart-sing-box.sh</code> 作为续期钩子</td></tr>
+</table></div>
+<h3 id="domains">节点域名管理（多个域名与 Token）</h3>
+<p>控制台 → 节点 → <b>域名管理</b> 可以添加多个主域名，每个主域名配一个自己的 Cloudflare Token。一键部署节点时，在「节点域名」后面的下拉框选择用哪个主域名（如 <code>hk1</code> + <code>.example.com</code>）。</p>
+<ul>
+  <li><b>添加：</b>域名的 DNS 必须托管在 Cloudflare。为它单独创建 Token（Edit zone DNS 模板，Zone Resources 只选这个域名），在弹窗里填写后点「验证并添加」。保存前会检查能否访问域名、读取和编辑 DNS（创建一条 <code>_sbm-check</code> 测试 TXT 记录并立即删除），不通过不会保存。</li>
+  <li><b>检测：</b>只读检查现有 Token 是否仍然有效。Token 过期或被删后，自动续期也会失败，建议偶尔检测一下。</li>
+  <li><b>更换 Token：</b>验证通过后覆盖原 Token 文件，已签发证书的续期自动使用新 Token，不用改别的。</li>
+  <li><b>设为默认：</b>部署表单默认选中的域名，命令行部署不带 <code>--zone</code> 时也用它。</li>
+  <li><b>删除：</b>只能删除没有被订阅域名和节点使用的域名；只删除订阅服务器上保存的 Token，不会动 Cloudflare 里的 Token 和 DNS 记录。</li>
+</ul>
+<p>Token 保存为仅 root 可读的文件：安装时设置的主域名（<code>{{BASE_DOMAIN}}</code>）沿用 <code>/etc/letsencrypt/cloudflare.ini</code>，之后添加的在 <code>/etc/letsencrypt/sbm-cf/&lt;域名&gt;.ini</code>。控制台和接口都不会再显示 Token 内容。Token 不会下发到节点。</p>
+<div class="note"><b>接入节点的证书：</b>如果节点自己用 certbot 续期证书，续期后需要重启 sing-box 才会加载新证书。把仓库里的 <code>contrib/certbot-restart-sing-box.sh</code> 放到节点的 <code>/etc/letsencrypt/renewal-hooks/deploy/</code> 并加执行权限即可：它只在续期的证书正被 sing-box 使用时，先校验配置再重启。用 standalone 方式续期的节点还需要保持入站 80 端口可访问。<br>查看钩子执行记录：在节点上运行 <code>journalctl -t certbot-sing-box</code>。</div>
+<p>Token 失效或被删除时，重新在 Cloudflare 创建，然后在「域名管理」里点该域名的 <b>更换 Token</b> 即可（命令行：<code>sudo sbm domain token {{BASE_DOMAIN}}</code>）。</p>
+</section>
+
+<section id="cli">
+<h2>5. 命令行参考</h2>
+<p>在你的电脑上 <code>ssh ubuntu@{{MANAGER_IP}}</code> 登录订阅服务器后使用，所有命令都需要 <code>sudo</code>。命令行和网页控制台共用同一份数据和同一把锁，可以混用。</p>
+<pre><code><span class="c"># 用户</span>
+sudo sbm user list                         <span class="c"># 列出用户、状态、账号池</span>
+sudo sbm user add alice --note "张三的手机"   <span class="c"># 新增（不重启）</span>
+sudo sbm user show alice                   <span class="c"># 查看链接</span>
+sudo sbm user disable alice [--now]        <span class="c"># 停用；--now 立即踢下线</span>
+sudo sbm user enable alice
+sudo sbm user del alice [--now]            <span class="c"># 删除；--now 立即踢下线</span>
+sudo sbm user reset alice [--later]        <span class="c"># 重置；默认立即生效，--later 凌晨生效</span>
+
+<span class="c"># 流量统计</span>
+sudo sbm traffic                           <span class="c"># 本月各用户流量</span>
+sudo sbm traffic collect -v                <span class="c"># 立即采集一次</span>
+
+<span class="c"># 账号池与维护</span>
+sudo sbm pool                              <span class="c"># 账号池、待清理账号、下次维护时间</span>
+sudo sbm sync                              <span class="c"># 立即维护（只有变化的节点会重启）</span>
+
+<span class="c"># 节点</span>
+sudo sbm node list
+sudo sbm node pubkey                       <span class="c"># 授权命令</span>
+sudo sbm node deploy HK-01 --host 203.0.113.10 --sub hk1 [--zone example.com] [--ssh-port 22] [--port 443]
+sudo sbm node attach HK-01 --host 203.0.113.20 [--inbound-tag anytls-in]
+sudo sbm node del HK-01
+sudo sbm node versions                     <span class="c"># 各节点版本与最新版</span>
+sudo sbm node upgrade --all                <span class="c"># 或 sbm node upgrade HK-01 --version 1.14.3</span>
+sudo sbm status                            <span class="c"># 节点运行状态</span>
+
+<span class="c"># 节点域名与 Cloudflare Token</span>
+sudo sbm domain list                       <span class="c"># 域名、默认、用途</span>
+sudo sbm domain add example.com --note 备用  <span class="c"># 随后提示输入 Token（不显示），验证通过才保存</span>
+sudo sbm domain check example.com          <span class="c"># 只读检测 Token</span>
+sudo sbm domain token example.com          <span class="c"># 更换 Token</span>
+sudo sbm domain default example.com        <span class="c"># 设为默认</span>
+sudo sbm domain del example.com            <span class="c"># 删除未使用的域名</span></code></pre>
+<div class="note"><b>注意：</b>如果你自己的电脑也通过某个节点上网，在命令行执行会重启节点的操作时 SSH 会断开，可能导致操作中断。这类操作建议用网页控制台，或用 <code>sudo systemd-run --unit sbm-job sbm ...</code> 放到后台执行，再用 <code>journalctl -u sbm-job</code> 查看结果。</div>
+</section>
+
+<section id="trouble">
+<h2>6. 故障排查</h2>
+<h3>控制台操作后提示「连接中断」</h3>
+<p>你的电脑正好通过刚重启的节点上网，响应没收到。操作在服务器上通常已完成，页面会在 4 秒后自动刷新确认。</p>
+<h3>某个用户连不上</h3>
+<ol>
+  <li>确认用户状态是「启用」。</li>
+  <li>让对方在客户端<b>更新订阅</b>，再换一个节点试试。</li>
+  <li>看节点卡片是否「已停止」或「待同步」；有「待同步」就点 <b>同步节点</b>。</li>
+  <li>对方客户端版本太旧可能不支持 AnyTLS，让对方升级到最新版。</li>
+  <li>仍不行就 <b>重置</b> 该用户，把新的使用说明页发过去。</li>
+</ol>
+<h3>所有人都连不上某个节点</h3>
+<ul>
+  <li>卡片显示「无法连接」：服务器宕机、IP 被封或服务商安全组变更，登录服务商控制台检查。</li>
+  <li>卡片显示「已停止」：在节点上运行 <code>journalctl -u sing-box -n 50</code> 查看原因；常见是证书过期。</li>
+  <li>节点 IP 被封时，可以换一台服务器重新「一键部署」，再「移除」旧节点。</li>
+</ul>
+<h3>订阅链接打开是 404</h3>
+<p>链接对应的用户已被停用、删除或重置。到控制台查看该用户的最新链接。</p>
+<h3>控制台打不开</h3>
+<ul>
+  <li>检查云服务商安全组是否放行 TCP {{SUB_PORT}}。</li>
+  <li>登录框反复弹出：密码错误，重设管理员密码：<code>ssh -t ubuntu@{{MANAGER_IP}} "sudo htpasswd -B /etc/nginx/sbm-admin.htpasswd admin"</code></li>
+  <li>页面显示 502：管理后台服务异常，运行 <code>sudo systemctl restart sbm-web</code>，并用 <code>journalctl -u sbm-web -n 50</code> 查看原因。</li>
+</ul>
+<h3>CentOS 7 节点</h3>
+<p>CentOS 7 的 systemd 太旧，部署时会自动添加兼容配置，让 sing-box 以 root 运行。CentOS 7 已停止维护，建议有条件时重装为 Debian 12 / Ubuntu 24.04 后重新部署。</p>
+</section>
+
+<section id="backup">
+<h2>7. 备份与恢复</h2>
+<p>重要数据都在订阅服务器上，节点可以随时重新部署。建议每次较大改动后备份一次：</p>
+<pre><code>sudo tar czf ~/sbm-backup-$(date +%F).tar.gz \
+  /etc/sbm /etc/letsencrypt /root/.ssh/sbm_node /root/.ssh/sbm_node.pub \
+  /usr/local/bin/sbm /opt/sbm-web /etc/nginx/sites-available/sub.conf \
+  /etc/nginx/sbm-admin.htpasswd /etc/systemd/system/sbm-web.service \
+  /etc/systemd/system/sbm-maintain.service /etc/systemd/system/sbm-maintain.timer \
+  /etc/systemd/system/sbm-traffic.service /etc/systemd/system/sbm-traffic.timer \
+  /usr/local/share/sbm</code></pre>
+<p>然后在你自己的电脑上下载保存（PowerShell）：</p>
+<pre><code>scp ubuntu@{{MANAGER_IP}}:~/sbm-backup-*.tar.gz .</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>文件</th><th>内容</th></tr>
+  <tr><td><code>/etc/sbm/users.json</code></td><td>用户、密码、订阅令牌（最重要）</td></tr>
+  <tr><td><code>/etc/sbm/creds.json</code></td><td>账号池、待清理账号、流量统计编号</td></tr>
+  <tr><td><code>/etc/sbm/traffic.db</code></td><td>流量统计数据</td></tr>
+  <tr><td><code>/etc/sbm/config.json</code></td><td>订阅域名、节点列表</td></tr>
+  <tr><td><code>/root/.ssh/sbm_node</code></td><td>管理节点用的 SSH 私钥</td></tr>
+  <tr><td><code>/etc/letsencrypt/</code></td><td>证书和 Cloudflare Token</td></tr>
+</table></div>
+<div class="warn">备份文件里有所有用户的密码、SSH 私钥和 Cloudflare Token，请妥善保管，不要上传到网盘公开目录或发给他人。</div>
+<p>恢复：在新服务器上解压到根目录（<code>sudo tar xzf 备份.tar.gz -C /</code>），安装 <code>nginx certbot python3-certbot-dns-cloudflare python3-qrcode jq</code>，启用 Nginx 站点和 sbm-web / sbm-maintain.timer 服务，再把 <code>{{SUB_DOMAIN}}</code> 解析到新 IP。各节点的授权限制了只能从 {{MANAGER_IP}} 登录，换了订阅服务器 IP 需要在每个节点上重新运行授权命令。</p>
+</section>
+
+<section id="security">
+<h2>8. 安全建议</h2>
+<ul>
+  <li>控制台地址和管理员密码只自己掌握；定期更换管理员密码。</li>
+  <li>每个人用自己的账号，不要多人共用。有人离开就删除，链接外泄就重置。</li>
+  <li>各服务器的 root 密码不要通过聊天工具发送；已经发出过的密码请尽快修改（<code>ssh -t root@节点IP passwd</code>）。</li>
+  <li>节点和订阅服务器保持系统更新；CentOS 7 等停止维护的系统尽早更换。</li>
+  <li>请自行评估服务器所在地法规和云服务商条款的风险。</li>
+</ul>
+</section>
+</main>
+</div>
+<script>
+try { const t = localStorage.getItem("sbm-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</body>
+</html>

@@ -1,0 +1,1314 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>sbm 控制台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bd6'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f5fa;
+  --bg-grad: radial-gradient(1200px 500px at 10% -10%, #e4e4ff 0%, transparent 60%), radial-gradient(900px 500px at 110% 0%, #dff5f0 0%, transparent 55%);
+  --surface: #ffffff;
+  --surface-2: #f8f9fc;
+  --border: #e6e8f0;
+  --text: #1b1d29;
+  --muted: #6b7084;
+  --accent: #5b5bd6;
+  --accent-soft: #eeeefc;
+  --accent-text: #ffffff;
+  --ok: #18a058;
+  --ok-soft: #e6f6ed;
+  --warn: #d97706;
+  --warn-soft: #fdf3e2;
+  --danger: #dc3545;
+  --danger-soft: #fdeced;
+  --shadow: 0 1px 2px rgba(20, 22, 40, .04), 0 8px 24px rgba(20, 22, 40, .06);
+  --radius: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1017;
+    --bg-grad: radial-gradient(1200px 500px at 10% -10%, #1d1d3a 0%, transparent 60%), radial-gradient(900px 500px at 110% 0%, #0f2a26 0%, transparent 55%);
+    --surface: #171923;
+    --surface-2: #1d202c;
+    --border: #2a2d3c;
+    --text: #e8e9f1;
+    --muted: #9196ab;
+    --accent: #8383f0;
+    --accent-soft: #23234a;
+    --accent-text: #0f1017;
+    --ok: #3ccf82;
+    --ok-soft: #12301f;
+    --warn: #f0a83a;
+    --warn-soft: #33260f;
+    --danger: #ff6b78;
+    --danger-soft: #3a1a1f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1017;
+  --bg-grad: radial-gradient(1200px 500px at 10% -10%, #1d1d3a 0%, transparent 60%), radial-gradient(900px 500px at 110% 0%, #0f2a26 0%, transparent 55%);
+  --surface: #171923;
+  --surface-2: #1d202c;
+  --border: #2a2d3c;
+  --text: #e8e9f1;
+  --muted: #9196ab;
+  --accent: #8383f0;
+  --accent-soft: #23234a;
+  --accent-text: #0f1017;
+  --ok: #3ccf82;
+  --ok-soft: #12301f;
+  --warn: #f0a83a;
+  --warn-soft: #33260f;
+  --danger: #ff6b78;
+  --danger-soft: #3a1a1f;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg-grad), var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  min-height: 100vh;
+}
+button, input { font: inherit; color: inherit; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 24px 16px 64px; }
+
+/* 顶栏 */
+.top { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; flex-wrap: wrap; }
+.logo { width: 40px; height: 40px; border-radius: 11px; background: linear-gradient(135deg, var(--accent), #2bb5a0); display: grid; place-items: center; box-shadow: var(--shadow); flex: none; }
+.logo svg { width: 22px; height: 22px; }
+.title h1 { font-size: 19px; margin: 0; letter-spacing: .2px; }
+.title p { margin: 0; color: var(--muted); font-size: 12.5px; }
+.top .spacer { flex: 1; }
+.top-actions { display: flex; gap: 8px; }
+
+/* 按钮 */
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); padding: 7px 13px; border-radius: 9px; cursor: pointer; transition: background .15s, border-color .15s, transform .05s; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn svg { width: 15px; height: 15px; flex: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--danger); }
+.btn.danger:hover { border-color: var(--danger); background: var(--danger-soft); }
+.btn.ghost { border-color: transparent; background: transparent; padding: 6px 9px; }
+.btn.ghost:hover { background: var(--surface-2); border-color: var(--border); }
+.btn.sm { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+
+/* 统计卡片 */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+.stat .k { color: var(--muted); font-size: 12.5px; }
+.stat .v { font-size: 26px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.stat .v small { font-size: 14px; color: var(--muted); font-weight: 500; }
+
+/* 区块 */
+.section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 22px; overflow: hidden; }
+.section-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.section-head h2 { font-size: 15px; margin: 0; }
+.section-head .spacer { flex: 1; }
+.search { position: relative; }
+.search input { border: 1px solid var(--border); background: var(--surface-2); border-radius: 9px; padding: 6px 10px 6px 30px; width: 200px; outline: none; }
+.search input:focus { border-color: var(--accent); }
+.search svg { position: absolute; left: 9px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); color: var(--muted); }
+
+/* 节点 */
+.nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; padding: 16px 18px; }
+.node { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--surface-2); }
+.node-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.node-head b { font-size: 14.5px; }
+.node dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 13px; }
+.node dt { color: var(--muted); }
+.node dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.node dt { align-self: center; }
+
+/* 负载、内存进度条 */
+.meter { display: flex; align-items: center; gap: 8px; cursor: help; }
+.meter-track { flex: 1; height: 7px; background: var(--border); border-radius: 99px; overflow: hidden; min-width: 60px; }
+.meter-fill { height: 100%; border-radius: 99px; transition: width .4s ease; }
+.meter-fill.low { background: var(--ok); }
+.meter-fill.mid { background: var(--warn); }
+.meter-fill.bad { background: var(--danger); }
+.meter-text { width: 38px; text-align: right; font-size: 12.5px; font-weight: 600; }
+
+/* 状态胶囊 */
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 9px; border-radius: 99px; font-weight: 550; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.ok { color: var(--ok); background: var(--ok-soft); }
+.pill.bad { color: var(--danger); background: var(--danger-soft); }
+.pill.wait { color: var(--muted); background: var(--surface); border: 1px solid var(--border); }
+.pill.off { color: var(--warn); background: var(--warn-soft); }
+
+/* 用户表 */
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 12px 18px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { font-size: 12px; color: var(--muted); font-weight: 550; background: var(--surface-2); }
+tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: var(--surface-2); }
+.uname { font-weight: 600; }
+.note { color: var(--muted); font-size: 12.5px; cursor: pointer; border-bottom: 1px dashed transparent; }
+.note:hover { border-bottom-color: var(--muted); }
+.note.empty { opacity: .6; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 650; font-size: 13px; color: #fff; flex: none; }
+.user-cell { display: flex; align-items: center; gap: 11px; }
+.actions { display: flex; gap: 4px; justify-content: flex-end; }
+.muted { color: var(--muted); }
+.empty-state { padding: 40px 18px; text-align: center; color: var(--muted); }
+
+/* 开关 */
+.switch { position: relative; width: 38px; height: 22px; flex: none; display: inline-block; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch span { position: absolute; inset: 0; background: var(--border); border-radius: 99px; transition: .2s; cursor: pointer; }
+.switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.switch input:checked + span { background: var(--ok); }
+.switch input:checked + span::before { transform: translateX(16px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.status-cell { display: flex; align-items: center; gap: 9px; }
+
+/* 弹窗 */
+.modal-bg { position: fixed; inset: 0; background: rgba(10, 12, 24, .45); backdrop-filter: blur(3px); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+.modal-bg.show { display: flex; animation: fade .15s ease-out; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; width: 100%; max-width: 440px; box-shadow: 0 24px 60px rgba(0,0,0,.25); animation: pop .18s ease-out; max-height: calc(100vh - 32px); overflow: auto; }
+.modal.wide { max-width: 720px; }
+.modal-head { padding: 16px 20px 0; display: flex; align-items: center; }
+.modal-head h3 { margin: 0; font-size: 16px; flex: 1; }
+.modal-body { padding: 14px 20px; }
+.modal-foot { padding: 0 20px 18px; display: flex; justify-content: flex-end; gap: 8px; }
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 5px; }
+.field input { width: 100%; border: 1px solid var(--border); background: var(--surface-2); border-radius: 9px; padding: 8px 11px; outline: none; }
+.field input:focus { border-color: var(--accent); }
+.hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+.callout { background: var(--warn-soft); color: var(--warn); border-radius: 9px; padding: 9px 12px; font-size: 13px; margin-top: 4px; }
+.callout.ok { background: var(--ok-soft); color: var(--ok); }
+.check-row { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; font-size: 13px; }
+.check-row input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--danger); flex: none; }
+.chip { font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 99px; padding: 2px 10px; cursor: help; }
+.chip b { color: var(--text); font-weight: 600; }
+@keyframes fade { from { opacity: 0; } }
+@keyframes pop { from { transform: scale(.97) translateY(6px); opacity: 0; } }
+
+/* 订阅弹窗 */
+.sub-grid { display: grid; grid-template-columns: 1fr 220px; gap: 18px; }
+.link-row { border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; margin-bottom: 9px; cursor: pointer; transition: border-color .15s, background .15s; }
+.link-row:hover { border-color: var(--accent); }
+.link-row.active { border-color: var(--accent); background: var(--accent-soft); }
+.link-row .lbl { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.link-row .lbl .spacer { flex: 1; }
+.link-row code { display: block; font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); overflow-wrap: anywhere; margin-top: 4px; }
+.qr-box { background: #fff; border-radius: 12px; padding: 10px; border: 1px solid var(--border); aspect-ratio: 1; display: grid; place-items: center; }
+.qr-box img { width: 100%; height: 100%; display: block; }
+.qr-cap { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+/* 进度遮罩与提示 */
+.busy { position: fixed; inset: 0; background: rgba(10, 12, 24, .35); backdrop-filter: blur(2px); display: none; align-items: center; justify-content: center; z-index: 60; }
+.busy.show { display: flex; }
+.busy-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 24px; display: flex; align-items: center; gap: 14px; box-shadow: var(--shadow); max-width: 340px; }
+.spinner { width: 22px; height: 22px; border: 2.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 70; max-width: calc(100vw - 32px); }
+.toast { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); width: 340px; max-width: 100%; animation: pop .2s ease-out; }
+.toast.ok { border-left-color: var(--ok); }
+.toast.err { border-left-color: var(--danger); }
+.toast.warn { border-left-color: var(--warn); }
+.toast b { display: block; font-size: 13.5px; }
+.toast pre { margin: 4px 0 0; font: 11.5px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; color: var(--muted); }
+
+/* 节点卡片附加 */
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted); }
+.badge.managed { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.node-foot { display: flex; justify-content: flex-end; gap: 4px; margin-top: 10px; }
+.ver-new { display: inline-block; margin-left: 6px; font-size: 11px; padding: 0 6px; border-radius: 6px; color: var(--warn); background: var(--warn-soft); }
+.ver-ok { display: inline-block; margin-left: 6px; font-size: 11px; color: var(--ok); }
+
+/* 版本管理 */
+.ver-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.ver-head .big { font-size: 22px; font-weight: 650; }
+.ver-head select { border: 1px solid var(--border); background: var(--surface-2); border-radius: 9px; padding: 7px 10px; outline: none; font: inherit; color: inherit; }
+.ver-list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.field .ver-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; margin: 0; font-size: 14px; color: var(--text); }
+.field select { width: 100%; }
+.ver-item:last-child { border-bottom: none; }
+.ver-item:hover { background: var(--surface-2); }
+.ver-item input { width: 16px; height: 16px; accent-color: var(--accent); }
+.ver-item .nm { font-weight: 600; flex: 1; }
+.ver-item .cur { font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* 添加节点弹窗 */
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; margin-bottom: 16px; }
+.seg button { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; cursor: pointer; color: var(--muted); }
+.seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
+.step { display: flex; gap: 10px; margin-bottom: 14px; }
+.step-no { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 700; display: grid; place-items: center; flex: none; margin-top: 1px; }
+.step-body { flex: 1; min-width: 0; }
+.step-body > b { display: block; margin-bottom: 6px; }
+.cmd-box { position: relative; background: #0f1017; color: #c9f7d9; border-radius: 10px; padding: 10px 70px 10px 12px; font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.cmd-box .btn { position: absolute; right: 8px; top: 8px; background: #23253a; border-color: #34374d; color: #e8e9f1; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.suffix { display: flex; align-items: stretch; }
+.suffix input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.suffix span { border: 1px solid var(--border); border-left: 0; background: var(--surface); color: var(--muted); padding: 8px 10px; border-radius: 0 9px 9px 0; white-space: nowrap; font-size: 13px; }
+.suffix select { border: 1px solid var(--border); border-left: 0; background: var(--surface); color: var(--text); padding: 0 8px; border-radius: 0 9px 9px 0; font: inherit; font-size: 13px; outline: none; max-width: 55%; }
+
+/* 流量统计：图表配色（下载 = 系列 1 蓝，上传 = 系列 2 橙，已用校验脚本验证深浅两套） */
+:root { --s1: #2a78d6; --s2: #eb6834; --grid: #eceef3; --axis: #c3c2b7; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s1: #3987e5; --s2: #d95926; --grid: #262938; --axis: #3a3d4c; } }
+:root[data-theme="dark"] { --s1: #3987e5; --s2: #d95926; --grid: #262938; --axis: #3a3d4c; }
+.traffic-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.traffic-cell button { border: 0; background: none; padding: 0; cursor: pointer; color: var(--text); font: inherit; border-bottom: 1px dashed var(--muted); }
+.traffic-cell button:hover { color: var(--accent); border-color: var(--accent); }
+.stat .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+.tile { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; background: var(--surface-2); }
+.tile .k { font-size: 12px; color: var(--muted); }
+.tile .v { font-size: 20px; font-weight: 650; margin-top: 2px; }
+.tile .d { font-size: 12px; color: var(--muted); }
+.legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.chart-box { position: relative; }
+.chart-box svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart-box .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); padding: 8px 10px; font-size: 12.5px; white-space: nowrap; display: none; z-index: 2; }
+.chart-tip b { display: block; margin-bottom: 2px; }
+.chart-tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.chart-tip span { font-variant-numeric: tabular-nums; }
+.data-table { margin-top: 14px; }
+.data-table summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.data-table table { font-size: 13px; margin-top: 6px; }
+.data-table td, .data-table th { padding: 5px 10px; font-variant-numeric: tabular-nums; }
+.sec-title { font-size: 13.5px; font-weight: 600; margin: 18px 0 6px; }
+
+/* 域名管理 */
+.dom-table td { padding: 10px 12px; }
+.dom-table td:first-child { font-weight: 600; }
+.dom-used { font-size: 12.5px; color: var(--muted); }
+.dom-result { margin-top: 6px; font-size: 12.5px; white-space: pre-line; }
+.dom-result.ok { color: var(--ok); }
+.dom-result.err { color: var(--danger); }
+.dom-actions { display: flex; gap: 2px; justify-content: flex-end; flex-wrap: wrap; }
+.add-box { border: 1px dashed var(--border); border-radius: 12px; padding: 14px 16px 4px; margin-top: 16px; }
+.add-box > b { display: block; margin-bottom: 10px; }
+.howto { font-size: 12.5px; color: var(--muted); margin: -4px 0 12px; }
+.howto ol { margin: 4px 0 0; padding-left: 18px; }
+.preview-line { font-size: 12.5px; color: var(--muted); margin-top: -6px; margin-bottom: 12px; }
+.preview-line b { color: var(--text); font-weight: 600; }
+
+/* 任务日志 */
+.log-box { background: #0f1017; color: #d6d8e6; border-radius: 10px; padding: 12px 14px; height: 340px; overflow: auto; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-box .ok { color: #5fe3a1; }
+.log-box .err { color: #ff8a95; }
+.log-box .step-line { color: #a9a9ff; font-weight: 600; }
+.log-box .warn { color: #f5c26b; }
+
+@media (max-width: 760px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .sub-grid { grid-template-columns: 1fr; }
+  .qr-col { max-width: 240px; margin: 0 auto; width: 100%; }
+  .col-created { display: none; }
+  th, td { padding: 11px 12px; }
+  .search input { width: 140px; }
+  .actions .btn .txt { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
+    <div class="title">
+      <h1>sbm 控制台</h1>
+      <p id="domain">加载中…</p>
+    </div>
+    <div class="spacer"></div>
+    <div class="top-actions">
+      <a class="btn ghost" href="manual" target="_blank" rel="noopener" title="管理手册" style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>使用手册</a>
+      <button class="btn ghost" id="themeBtn" title="切换深浅色"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <button class="btn" id="syncBtn" title="把所有用户重新推送到节点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2"/><path d="M21 4v5h-5M3 20v-5h5"/></svg>同步节点</button>
+      <button class="btn primary" id="addBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新增用户</button>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="k">用户总数</div><div class="v" id="sTotal">–</div></div>
+    <div class="stat"><div class="k">启用中</div><div class="v" id="sEnabled">–</div></div>
+    <div class="stat"><div class="k">本月流量</div><div class="v" id="sTraffic">–</div><div class="sub" id="sTrafficSub"></div></div>
+    <div class="stat"><div class="k">节点在线</div><div class="v" id="sNodes">–</div></div>
+  </div>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>节点</h2>
+      <div class="spacer"></div>
+      <button class="btn sm" id="verBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>版本管理</button>
+      <button class="btn sm" id="domBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>域名管理</button>
+      <button class="btn sm" id="addNodeBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加节点</button>
+      <button class="btn ghost sm" id="statusBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>刷新状态</button>
+    </div>
+    <div class="nodes" id="nodes"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>用户</h2>
+      <span class="chip" id="poolChip"></span>
+      <div class="spacer"></div>
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="q" placeholder="搜索用户或备注" autocomplete="off">
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>用户</th><th>状态</th><th>本月流量</th><th class="col-created">创建时间</th><th style="text-align:right">操作</th></tr></thead>
+      <tbody id="users"></tbody>
+    </table>
+    <div class="empty-state" id="empty" hidden>没有匹配的用户</div>
+  </section>
+</div>
+
+<!-- 新增用户 -->
+<div class="modal-bg" id="addModal">
+  <form class="modal" id="addForm" autocomplete="off">
+    <div class="modal-head"><h3>新增用户</h3></div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="fName">用户名</label>
+        <input id="fName" required maxlength="32" pattern="[A-Za-z0-9_.\-]{1,32}" placeholder="例如 alice">
+        <div class="hint">字母、数字、_ . -，最长 32 位。密码和订阅链接自动生成。</div>
+      </div>
+      <div class="field">
+        <label for="fNote">备注（可选）</label>
+        <input id="fNote" maxlength="64" placeholder="例如 张三的手机">
+      </div>
+      <div class="callout" id="addCallout"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close>取消</button>
+      <button type="submit" class="btn primary">创建</button>
+    </div>
+  </form>
+</div>
+
+<!-- 编辑备注 -->
+<div class="modal-bg" id="noteModal">
+  <form class="modal" id="noteForm" autocomplete="off">
+    <div class="modal-head"><h3 id="noteTitle">编辑备注</h3></div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="fNoteEdit">备注</label>
+        <input id="fNoteEdit" maxlength="64">
+        <div class="hint">只保存在管理端，不会重启节点。</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close>取消</button>
+      <button type="submit" class="btn primary">保存</button>
+    </div>
+  </form>
+</div>
+
+<!-- 订阅 -->
+<div class="modal-bg" id="subModal">
+  <div class="modal wide">
+    <div class="modal-head"><h3 id="subTitle">订阅</h3><button class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <div class="sub-grid">
+        <div id="subLinks"></div>
+        <div class="qr-col">
+          <div class="qr-box"><img id="qrImg" alt="订阅二维码"></div>
+          <div class="qr-cap" id="qrCap">用客户端扫码导入</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 添加节点 -->
+<div class="modal-bg" id="nodeModal">
+  <form class="modal wide" id="nodeForm" autocomplete="off">
+    <div class="modal-head"><h3>添加节点</h3><button type="button" class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <div class="seg" id="nodeMode">
+        <button type="button" data-mode="deploy" class="on">一键部署新服务器</button>
+        <button type="button" data-mode="attach">接入已有 sing-box</button>
+      </div>
+      <div class="step">
+        <div class="step-no">1</div>
+        <div class="step-body">
+          <b>授权订阅服务器管理这台服务器</b>
+          <div class="muted" style="font-size:12.5px;margin-bottom:8px">用 root 登录新服务器，运行下面这条命令一次。它只添加一把公钥，并限定只能从订阅服务器登录，不会改动其他内容。</div>
+          <div class="cmd-box"><span id="pubCmd">加载中…</span><button type="button" class="btn sm" id="copyPub">复制</button></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-no">2</div>
+        <div class="step-body">
+          <b>填写节点信息</b>
+          <div class="grid2">
+            <div class="field"><label for="nName">节点名称（显示在客户端里）</label><input id="nName" required maxlength="32" pattern="[A-Za-z0-9_.\-]{1,32}" placeholder="例如 HK-01"></div>
+            <div class="field"><label for="nHost">服务器 IP</label><input id="nHost" required maxlength="253" placeholder="例如 203.0.113.10"></div>
+            <div class="field"><label for="nSshPort">SSH 端口</label><input id="nSshPort" type="number" min="1" max="65535" value="22" required></div>
+            <div class="field deploy-only"><label for="nPort">节点端口（AnyTLS）</label><input id="nPort" type="number" min="1" max="65535" value="443"></div>
+            <div class="field attach-only" hidden><label for="nTag">入站 tag</label><input id="nTag" value="anytls-in"></div>
+          </div>
+          <div class="field deploy-only">
+            <label for="nSub">节点域名</label>
+            <div class="suffix"><input id="nSub" maxlength="32" pattern="[a-z0-9]([a-z0-9\-]{0,30}[a-z0-9])?" placeholder="例如 hk1"><select id="nZone" title="主域名（在「域名管理」中添加更多）"></select></div>
+            <div class="hint">使用所选主域名的 Cloudflare Token 自动添加解析并申请证书，证书由订阅服务器续期并推送到节点。主域名可在「域名管理」中增删。</div>
+          </div>
+          <div class="grid2 attach-only" hidden>
+            <div class="field"><label for="nPath">配置文件路径</label><input id="nPath" value="/etc/sing-box/config.json"></div>
+            <div class="field"><label for="nServer">节点域名（可选）</label><input id="nServer" placeholder="默认读取入站的 server_name"></div>
+          </div>
+          <div class="callout deploy-only">部署大约需要 1~2 分钟：设置 DNS → 申请证书 → 安装 sing-box → 启动。完成后自动加入所有用户的订阅，现有节点不受影响。<br>如果云服务商有安全组，记得放行节点端口。</div>
+          <div class="callout attach-only" hidden>节点上已有的 AnyTLS 用户会被替换成这里的用户列表，并重启该节点的 sing-box。目前只支持 AnyTLS 入站。</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close>取消</button>
+      <button type="submit" class="btn primary" id="nodeSubmit">开始部署</button>
+    </div>
+  </form>
+</div>
+
+<!-- 用户流量 -->
+<div class="modal-bg" id="trafficModal">
+  <div class="modal wide">
+    <div class="modal-head"><h3 id="trTitle">流量</h3><button class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <div class="tiles" id="trTiles"></div>
+      <div class="sec-title">最近 30 天每日流量</div>
+      <div class="legend"><span><i style="background:var(--s1)"></i>下载</span><span><i style="background:var(--s2)"></i>上传</span></div>
+      <div class="chart-box" id="trChart"><div class="chart-tip" id="trTip"></div></div>
+      <details class="data-table"><summary>查看每日数据表</summary><div id="trDaily"></div></details>
+      <div class="sec-title">本月各节点</div>
+      <div id="trNodes"></div>
+      <p class="hint">统计的是节点与目标网站之间的流量（用户实际收发的数据），每 5 分钟更新一次；不含客户端到节点那段的加密开销。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 域名管理 -->
+<div class="modal-bg" id="domModal">
+  <div class="modal wide">
+    <div class="modal-head"><h3>节点域名管理</h3><button class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <p class="muted" style="margin:0 0 12px;font-size:13px">一键部署节点时，会用所选主域名的 Cloudflare Token 添加 <code>前缀.主域名</code> 解析并申请证书。Token 只保存在订阅服务器上（仅 root 可读），保存后不会再显示。</p>
+      <table class="dom-table">
+        <thead><tr><th>主域名</th><th>用途</th><th style="text-align:right">操作</th></tr></thead>
+        <tbody id="domList"></tbody>
+      </table>
+      <form class="add-box" id="domForm" autocomplete="off">
+        <b>添加域名</b>
+        <div class="howto">Token 创建方法（每个域名单独一个）：
+          <ol>
+            <li>域名的 DNS 需要托管在 Cloudflare（NS 已指向 Cloudflare）。</li>
+            <li>Cloudflare → 右上角头像 → My Profile → API Tokens → Create Token → 选 <b>Edit zone DNS</b> 模板。</li>
+            <li>Zone Resources 选 Include · Specific zone · 这个域名 → Continue → Create Token，复制生成的 Token。</li>
+          </ol>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="dZone">主域名</label><input id="dZone" required maxlength="253" placeholder="例如 example.com" autocapitalize="off" spellcheck="false"></div>
+          <div class="field"><label for="dNote">备注（可选）</label><input id="dNote" maxlength="64" placeholder="例如 备用域名"></div>
+        </div>
+        <div class="field"><label for="dToken">Cloudflare API Token</label><input id="dToken" type="password" required maxlength="100" autocomplete="new-password" spellcheck="false"></div>
+        <div class="hint" style="margin:-6px 0 12px">保存前会验证：能否访问该域名、读取并编辑 DNS（会创建一条测试 TXT 记录并立即删除）。</div>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button type="submit" class="btn primary">验证并添加</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- 更换 Token -->
+<div class="modal-bg" id="tokModal">
+  <form class="modal" id="tokForm" autocomplete="off">
+    <div class="modal-head"><h3 id="tokTitle">更换 Token</h3></div>
+    <div class="modal-body">
+      <div class="field"><label for="tToken">新的 Cloudflare API Token</label><input id="tToken" type="password" required maxlength="100" autocomplete="new-password" spellcheck="false"></div>
+      <div class="hint">验证通过后替换旧 Token。已签发证书的自动续期会直接使用新 Token。</div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close>取消</button>
+      <button type="submit" class="btn primary">验证并保存</button>
+    </div>
+  </form>
+</div>
+
+<!-- 版本管理 -->
+<div class="modal-bg" id="verModal">
+  <form class="modal" id="verForm">
+    <div class="modal-head"><h3>sing-box 版本管理</h3><button type="button" class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <div class="ver-head">
+        <div><div class="muted" style="font-size:12px">最新正式版</div><div class="big" id="verLatest">–</div></div>
+        <div style="flex:1"></div>
+        <button type="button" class="btn ghost sm" id="verRefresh">重新检查</button>
+      </div>
+      <div class="field">
+        <label for="verSelect">升级到版本</label>
+        <select id="verSelect"></select>
+        <div class="hint" id="verHint">也可以选择旧版本进行回退。</div>
+      </div>
+      <div class="field">
+        <label>选择节点</label>
+        <div class="ver-list" id="verList"></div>
+      </div>
+      <div class="callout">节点逐个升级，每个会重启几秒。升级时保留现有配置；新版本启动失败会自动回滚到原版本。</div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close>取消</button>
+      <button type="submit" class="btn primary" id="verGo">升级所选节点</button>
+    </div>
+  </form>
+</div>
+
+<!-- 任务日志 -->
+<div class="modal-bg" id="jobModal">
+  <div class="modal wide">
+    <div class="modal-head"><h3 id="jobTitle">任务</h3><span id="jobPill" class="pill wait">进行中</span></div>
+    <div class="modal-body"><div class="log-box" id="jobLog"></div></div>
+    <div class="modal-foot"><button class="btn" id="jobClose" disabled>请稍候…</button></div>
+  </div>
+</div>
+
+<!-- 确认 -->
+<div class="modal-bg" id="confirmModal">
+  <div class="modal">
+    <div class="modal-head"><h3 id="cTitle">确认</h3></div>
+    <div class="modal-body"><div id="cBody"></div>
+      <label class="check-row" id="cCheckRow" hidden><input type="checkbox" id="cCheck"><span id="cCheckLabel"></span></label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="cNo">取消</button>
+      <button class="btn primary" id="cYes">确认</button>
+    </div>
+  </div>
+</div>
+
+<div class="busy" id="busy"><div class="busy-card"><div class="spinner"></div><div><b id="busyText">正在处理…</b><div class="muted" style="font-size:12.5px" id="busySub"></div></div></div></div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let state = { users: [], nodes: [] };
+let statuses = null;
+
+// ---------- 主题 ----------
+const THEME_KEY = "sbm-theme";
+function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
+try { applyTheme(localStorage.getItem(THEME_KEY)); } catch (e) {}
+$("#themeBtn").onclick = () => {
+  const dark = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  const next = dark ? "light" : "dark";
+  applyTheme(next);
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+};
+
+// ---------- 请求 ----------
+class NetError extends Error {}
+async function api(method, path, body) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json", "X-Requested-With": "sbm-web" } : { "X-Requested-With": "sbm-web" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      credentials: "same-origin",
+    });
+  } catch (e) {
+    throw new NetError("网络连接中断");
+  }
+  let data;
+  try { data = await res.json(); } catch (e) { throw new Error(`服务器返回 ${res.status}`); }
+  if (!res.ok) throw new Error(data.error || `服务器返回 ${res.status}`);
+  return data;
+}
+
+function toast(kind, title, detail) {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.innerHTML = `<b>${esc(title)}</b>${detail ? `<pre>${esc(detail)}</pre>` : ""}`;
+  $("#toasts").appendChild(el);
+  setTimeout(() => el.remove(), kind === "err" ? 9000 : 4500);
+}
+
+function busy(on, text, restart) {
+  $("#busyText").textContent = text || "正在处理…";
+  $("#busySub").textContent = restart ? "正在推送到节点，节点会重启几秒" : "无需重启节点";
+  $("#busy").classList.toggle("show", on);
+}
+
+// 修改用户的操作。restart 表示这次会推送节点（重启）：节点重启时，如果管理员自己的网络
+// 正好经过该节点，响应可能收不到，这时操作在服务端多半已经完成，等几秒重新拉取状态来确认。
+async function mutate(method, path, body, doneText, restart) {
+  busy(true, doneText.replace(/成功$/, "中…"), restart);
+  try {
+    const res = await api(method, path, body === undefined ? {} : body);
+    state = res.state;
+    render();
+    if (res.ok) toast("ok", doneText, res.log);
+    else toast("err", "部分节点推送失败", res.log);
+    setTimeout(loadStatus, 2500);
+    return true;
+  } catch (e) {
+    if (e instanceof NetError) {
+      toast("warn", "连接中断", "可能是节点重启导致的，4 秒后自动刷新确认结果。");
+      setTimeout(() => { load(); loadStatus(); }, 4000);
+      return true;
+    }
+    toast("err", "操作失败", e.message);
+    return false;
+  } finally {
+    busy(false);
+  }
+}
+
+// ---------- 弹窗 ----------
+function openModal(id) { $(id).classList.add("show"); }
+function closeModal(id) { $(id).classList.remove("show"); }
+document.querySelectorAll(".modal-bg").forEach((bg) => {
+  bg.addEventListener("click", (e) => {
+    if (e.target === bg || e.target.closest("[data-close]")) closeModal("#" + bg.id);
+  });
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelectorAll(".modal-bg.show").forEach((m) => m.classList.remove("show"));
+});
+
+// 取消时返回 false，确认时返回 { checked }（check 为可选的复选框 { label, checked }）
+function confirmBox(title, html, yesText, danger, check) {
+  return new Promise((resolve) => {
+    $("#cTitle").textContent = title;
+    $("#cBody").innerHTML = html;
+    $("#cCheckRow").hidden = !check;
+    if (check) { $("#cCheckLabel").textContent = check.label; $("#cCheck").checked = !!check.checked; }
+    const yes = $("#cYes");
+    yes.textContent = yesText || "确认";
+    yes.className = danger ? "btn danger" : "btn primary";
+    const done = (v) => { closeModal("#confirmModal"); yes.onclick = $("#cNo").onclick = null; resolve(v); };
+    yes.onclick = () => done({ checked: !!check && $("#cCheck").checked });
+    $("#cNo").onclick = () => done(false);
+    openModal("#confirmModal");
+  });
+}
+
+// ---------- 渲染 ----------
+const COLORS = ["#5b5bd6", "#2bb5a0", "#e0803a", "#d6457a", "#3a8ee0", "#8a5bd6", "#3fa34d", "#c7962c"];
+function colorOf(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length]; }
+
+function render() {
+  $("#domain").textContent = state.sub_domain ? `订阅域名 ${state.sub_domain}` : "";
+  const total = state.users.length;
+  const enabled = state.users.filter((u) => u.enabled).length;
+  $("#sTotal").textContent = total;
+  $("#sEnabled").textContent = enabled;
+  const t = state.traffic;
+  $("#sTraffic").textContent = t.enabled ? fmtBytes(t.month_total[0] + t.month_total[1]) : "–";
+  $("#sTrafficSub").textContent = t.enabled ? (t.collected ? `更新于 ${t.collected.slice(5)}` : "等待首次采集") : "统计未启用";
+  $("#sTrafficSub").title = t.enabled ? `上传 ${fmtBytes(t.month_total[0])} · 下载 ${fmtBytes(t.month_total[1])}，每 5 分钟采集一次` : "";
+  renderNodes();
+
+  const p = state.pool;
+  $("#poolChip").innerHTML = `账号池 <b>${p.spares}/${p.size}</b>` + (p.retiring.length ? ` · 待清理 <b>${p.retiring.length}</b>` : "");
+  $("#poolChip").title = `新增用户直接使用账号池里的备用账号，节点无需重启。\n每天 ${p.maintenance} 自动维护：清理旧账号并补满账号池。`
+    + (p.retiring.length ? "\n\n待清理：\n" + p.retiring.map((r) => `${r.user}（${r.reason}，${r.since}）`).join("\n") : "");
+
+  const q = $("#q").value.trim().toLowerCase();
+  const list = state.users.filter((u) => !q || u.name.toLowerCase().includes(q) || (u.note || "").toLowerCase().includes(q));
+  $("#empty").hidden = list.length > 0;
+  $("#empty").textContent = total ? "没有匹配的用户" : "还没有用户，点右上角“新增用户”";
+  $("#users").innerHTML = list.map((u) => `
+    <tr data-name="${esc(u.name)}">
+      <td><div class="user-cell">
+        <div class="avatar" style="background:${colorOf(u.name)}">${esc(u.name.slice(0, 1).toUpperCase())}</div>
+        <div><div class="uname">${esc(u.name)}</div>
+        <span class="note ${u.note ? "" : "empty"}" data-act="note" title="点击编辑备注">${u.note ? esc(u.note) : "添加备注"}</span></div>
+      </div></td>
+      <td><div class="status-cell">
+        <label class="switch" title="${u.enabled ? "点击停用" : "点击启用"}"><input type="checkbox" data-act="toggle" ${u.enabled ? "checked" : ""}><span></span></label>
+        ${u.enabled ? `<span class="pill ok">启用</span>`
+          : u.pending_purge ? `<span class="pill off" title="订阅已失效；节点上的账号将在 ${esc(state.pool.maintenance)} 维护时清理，在此之前已导入配置的设备仍可连接">停用 · 待清理</span>`
+          : `<span class="pill off">停用</span>`}
+      </div></td>
+      <td class="traffic-cell">${state.traffic.enabled
+        ? `<button data-act="traffic" title="上传 ${fmtBytes(u.month[0])} · 下载 ${fmtBytes(u.month[1])}，点击查看详情">${fmtBytes(u.month[0] + u.month[1])}</button>`
+        : `<span class="muted">–</span>`}</td>
+      <td class="col-created muted">${esc(u.created)}</td>
+      <td><div class="actions">
+        <button class="btn sm" data-act="sub" ${u.enabled ? "" : "disabled title=\"停用的用户没有订阅\""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg><span class="txt">订阅</span></button>
+        <button class="btn sm ghost" data-act="reset" title="重置密码和订阅链接"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span class="txt">重置</span></button>
+        <button class="btn sm ghost danger" data-act="del" title="删除用户"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span class="txt">删除</span></button>
+      </div></td>
+    </tr>`).join("");
+}
+
+function fmtBytes(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return i === 0 ? `${n} B` : `${n >= 100 ? n.toFixed(0) : n.toFixed(n >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+function nodeTrafficRow(name) {
+  const t = state.traffic;
+  const st = t.status[name];
+  if (st && !st.ok) return `<dt>今日流量</dt><dd title="${esc(st.error)}"><span class="pill off">统计异常</span></dd>`;
+  const [up, down] = t.nodes_today[name] || [0, 0];
+  return `<dt>今日流量</dt><dd title="上传 ${fmtBytes(up)} · 下载 ${fmtBytes(down)}">${fmtBytes(up + down)}</dd>`;
+}
+
+// 秒数 → “3 天 4 小时” / “2 小时 15 分” / “5 分钟”
+function duration(sec) {
+  if (sec == null) return "–";
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d} 天 ${h} 小时`;
+  if (h) return `${h} 小时 ${m} 分`;
+  return `${Math.max(m, 1)} 分钟`;
+}
+
+function bar(pct, text, title) {
+  const level = pct >= 85 ? "bad" : pct >= 60 ? "mid" : "low";
+  return `<div class="meter" title="${esc(title)}">
+    <div class="meter-track"><div class="meter-fill ${level}" style="width:${Math.min(100, Math.max(2, pct)).toFixed(0)}%"></div></div>
+    <span class="meter-text">${esc(text)}</span></div>`;
+}
+
+function metricRows(s, verRow) {
+  const row = (k, v, title) => `<dt>${k}</dt><dd${title ? ` title="${esc(title)}"` : ""}>${v}</dd>`;
+  const out = [];
+  out.push(row("系统", esc(s.os ? `${s.os} · ${s.arch}` : "–"), s.kernel ? `内核 ${s.kernel}` : ""));
+  out.push(verRow(s.version));
+  if (s.started_at) {
+    const started = new Date(s.started_at * 1000);
+    out.push(row("已运行", esc(duration(Date.now() / 1000 - s.started_at)), `sing-box 启动于 ${started.toLocaleString()}`));
+  } else {
+    out.push(row("已运行", "–"));
+  }
+  if (s.load && s.cores) {
+    // 1 分钟平均负载 ÷ CPU 核数：100% 表示所有核都满了，超过 100% 说明有任务在排队
+    const pct = (s.load[0] / s.cores) * 100;
+    out.push(row("CPU 负载", bar(pct, `${pct.toFixed(0)}%`,
+      `1 / 5 / 15 分钟平均负载 ${s.load.join(" / ")}，共 ${s.cores} 核`)));
+  }
+  if (s.mem_total) {
+    const pct = (s.mem_used / s.mem_total) * 100;
+    const fmt = (mb) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+    out.push(row("内存", bar(pct, `${pct.toFixed(0)}%`, `已用 ${fmt(s.mem_used)} / 共 ${fmt(s.mem_total)}`)));
+  }
+  out.push(row("开机时长", esc(duration(s.uptime))));
+  return out.join("");
+}
+
+function renderNodes() {
+  const online = statuses ? statuses.filter((s) => s.active).length : null;
+  $("#sNodes").innerHTML = statuses ? `${online}<small> / ${statuses.length}</small>` : "–";
+  $("#nodes").innerHTML = state.nodes.map((n) => {
+    const s = statuses && statuses.find((x) => x.name === n.name);
+    const pill = !s ? `<span class="pill wait">检测中</span>`
+      : !s.reachable ? `<span class="pill bad">无法连接</span>`
+      : s.active ? `<span class="pill ok">运行中</span>` : `<span class="pill bad">已停止</span>`;
+    const dirty = state.pool && state.pool.dirty.includes(n.name)
+      ? `<span class="pill off" title="上次推送账号到这个节点失败，部分新用户可能连不上它；下次维护或点“同步节点”会重试">待同步</span>` : "";
+    const row = (k, v) => `<dt>${k}</dt><dd>${esc(v || "–")}</dd>`;
+    const latest = releaseInfo && releaseInfo.latest;
+    const outdated = s && s.reachable && latest && s.version && s.version !== latest;
+    const verRow = (v) => `<dt>sing-box</dt><dd>${esc(v || "–")}${
+      outdated ? `<span class="ver-new">可升级到 ${esc(latest)}</span>` : latest && v === latest ? `<span class="ver-ok">✓ 最新</span>` : ""}</dd>`;
+    const foot = [
+      outdated ? `<button class="btn sm" data-upgrade-node>升级到 ${esc(latest)}</button>` : "",
+      state.nodes.length > 1 ? `<button class="btn sm ghost danger" data-remove-node>移除</button>` : "",
+    ].join("");
+    const badge = n.managed ? `<span class="badge managed" title="由 sbm 部署，证书自动续期">部署</span>` : `<span class="badge" title="外部接入，证书由节点自行管理">接入</span>`;
+    return `<div class="node" data-node="${esc(n.name)}">
+      <div class="node-head"><b>${esc(n.name)}</b>${badge}<div style="flex:1"></div>${dirty}${pill}</div>
+      <dl>
+        ${row("地址", `${n.server}:${n.port}`)}
+        ${state.traffic && state.traffic.enabled ? nodeTrafficRow(n.name) : ""}
+        ${row("服务器", n.host)}
+        ${s && s.reachable ? metricRows(s, verRow) : ""}
+        ${s && !s.reachable ? row("错误", s.error) : ""}
+      </dl>
+      ${foot ? `<div class="node-foot">${foot}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+// ---------- 数据 ----------
+async function load() {
+  try { state = await api("GET", "api/state"); render(); }
+  catch (e) { toast("err", "加载失败", e.message); }
+}
+async function loadStatus() {
+  statuses = null; renderNodes();
+  try { statuses = await api("GET", "api/status"); }
+  catch (e) { statuses = []; toast("err", "获取节点状态失败", e.message); }
+  renderNodes();
+}
+
+// ---------- 交互 ----------
+$("#q").addEventListener("input", render);
+$("#statusBtn").onclick = loadStatus;
+
+const poolEmpty = () => !state.pool || state.pool.spares === 0;
+const KICK_LABEL = "立即踢下线（重启节点，所有正在使用的连接会断开几秒）";
+const purgeNote = () => `节点上的账号会在每天 <b>${esc(state.pool.maintenance)}</b> 统一清理，在此之前已导入配置的设备仍可连接。`;
+
+$("#addBtn").onclick = () => {
+  $("#addForm").reset();
+  const c = $("#addCallout");
+  c.className = poolEmpty() ? "callout" : "callout ok";
+  c.textContent = poolEmpty()
+    ? "账号池已用完，这次需要重启节点，正在使用的连接会断开几秒（同时会补满账号池）。"
+    : `立即生效，节点无需重启（使用账号池中的备用账号，剩余 ${state.pool.spares} 个）。`;
+  openModal("#addModal");
+  setTimeout(() => $("#fName").focus(), 50);
+};
+$("#addForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const name = $("#fName").value.trim();
+  closeModal("#addModal");
+  const ok = await mutate("POST", "api/users", { name, note: $("#fNote").value }, `用户 ${name} 创建成功`, poolEmpty());
+  const u = ok && state.users.find((x) => x.name === name);
+  if (u) showSub(u);
+};
+
+$("#syncBtn").onclick = async () => {
+  if (await confirmBox("同步节点", "立即执行一次维护：清理待删除的旧账号、补满账号池，并把账号推送到每个节点。<br><br>平时不需要手动操作，每天 "
+      + `<b>${esc(state.pool.maintenance)}</b> 会自动执行。<div class='callout' style='margin-top:12px'>账号有变化的节点会重启，正在使用的连接会断开几秒；没有变化的节点不受影响。</div>`, "开始同步"))
+    mutate("POST", "api/sync", {}, "同步成功", true);
+};
+
+let noteTarget = null;
+$("#noteForm").onsubmit = async (e) => {
+  e.preventDefault();
+  closeModal("#noteModal");
+  try {
+    const res = await api("POST", `api/users/${encodeURIComponent(noteTarget)}/note`, { note: $("#fNoteEdit").value });
+    state = res.state; render(); toast("ok", "备注已保存");
+  } catch (err) { toast("err", "保存失败", err.message); }
+};
+
+$("#users").addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const name = el.closest("tr").dataset.name;
+  const u = state.users.find((x) => x.name === name);
+  const path = `api/users/${encodeURIComponent(name)}`;
+  const act = el.dataset.act;
+
+  if (act === "toggle") {
+    e.preventDefault();
+    if (u.enabled) {
+      const r = await confirmBox("停用用户", `停用 <b>${esc(name)}</b> 后订阅链接立即失效，重新启用后链接不变。<br><br>${purgeNote()}`,
+        "停用", true, { label: KICK_LABEL, checked: false });
+      if (!r) return;
+      mutate("POST", `${path}/disable`, { immediate: r.checked }, `${name} 已停用成功`, r.checked);
+    } else {
+      // 旧账号还在节点上时直接恢复；已清理则从账号池分配新账号；池空了才需要重启
+      mutate("POST", `${path}/enable`, {}, `${name} 已启用成功`, !u.pending_purge && poolEmpty());
+    }
+  } else if (act === "traffic") {
+    showTraffic(name);
+  } else if (act === "sub") {
+    showSub(u);
+  } else if (act === "note") {
+    noteTarget = name;
+    $("#noteTitle").textContent = `编辑备注 · ${name}`;
+    $("#fNoteEdit").value = u.note || "";
+    openModal("#noteModal");
+    setTimeout(() => $("#fNoteEdit").focus(), 50);
+  } else if (act === "reset") {
+    const r = await confirmBox("重置用户", `为 <b>${esc(name)}</b> 生成新的密码和订阅链接，旧订阅链接立即失效，TA 需要重新导入新的订阅。适用于链接泄露的情况。`
+      + `<br><br>不勾选下面的选项时，旧密码要到每天 <b>${esc(state.pool.maintenance)}</b> 维护时才失效，在此之前用旧配置仍能连接。`,
+      "重置", true, { label: "立即让旧密码失效（重启节点，所有正在使用的连接会断开几秒）", checked: true });
+    if (r && await mutate("POST", `${path}/reset`, { immediate: r.checked }, `${name} 已重置成功`, r.checked || (u.enabled && poolEmpty()))) {
+      const nu = state.users.find((x) => x.name === name);
+      if (nu) showSub(nu);
+    }
+  } else if (act === "del") {
+    const r = await confirmBox("删除用户", `确定删除 <b>${esc(name)}</b>？订阅链接立即失效，此操作不可撤销。<br><br>${purgeNote()}`,
+      "删除", true, { label: KICK_LABEL, checked: false });
+    if (r) mutate("DELETE", path, { immediate: r.checked }, `${name} 已删除成功`, r.checked);
+  }
+});
+
+// ---------- 节点 ----------
+let nodeMode = "deploy";
+function setNodeMode(mode) {
+  nodeMode = mode;
+  document.querySelectorAll("#nodeMode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  document.querySelectorAll("#nodeModal .deploy-only").forEach((el) => (el.hidden = mode !== "deploy"));
+  document.querySelectorAll("#nodeModal .attach-only").forEach((el) => (el.hidden = mode !== "attach"));
+  $("#nSub").required = mode === "deploy";
+  $("#nodeSubmit").textContent = mode === "deploy" ? "开始部署" : "开始接入";
+}
+$("#nodeMode").onclick = (e) => { const b = e.target.closest("[data-mode]"); if (b) setNodeMode(b.dataset.mode); };
+
+$("#addNodeBtn").onclick = async () => {
+  $("#nodeForm").reset();
+  setNodeMode("deploy");
+  $("#nZone").innerHTML = (state.domains || []).map((d) =>
+    `<option value="${esc(d.zone)}" ${d.default ? "selected" : ""}>.${esc(d.zone)}</option>`).join("");
+  openModal("#nodeModal");
+  try { $("#pubCmd").textContent = (await api("GET", "api/pubkey")).command; }
+  catch (e) { $("#pubCmd").textContent = "获取失败：" + e.message; }
+};
+$("#copyPub").onclick = async (e) => {
+  await copy($("#pubCmd").textContent);
+  e.target.textContent = "已复制";
+  setTimeout(() => (e.target.textContent = "复制"), 1500);
+};
+
+$("#nodeForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const body = {
+    name: $("#nName").value.trim(),
+    host: $("#nHost").value.trim(),
+    ssh_port: $("#nSshPort").value,
+  };
+  if (nodeMode === "deploy") Object.assign(body, { sub: $("#nSub").value.trim(), port: $("#nPort").value, zone: $("#nZone").value });
+  else Object.assign(body, { inbound_tag: $("#nTag").value.trim(), config_path: $("#nPath").value.trim(), server: $("#nServer").value.trim() });
+  try {
+    const { job } = await api("POST", `api/nodes/${nodeMode}`, body);
+    closeModal("#nodeModal");
+    runJob(job);
+  } catch (err) { toast("err", "无法开始", err.message); }
+};
+
+function logClass(line) {
+  if (/✗/.test(line)) return "err";
+  if (/⚠|提醒/.test(line)) return "warn";
+  if (/完成：/.test(line)) return "ok";
+  if (/\[\d\/\d\]/.test(line)) return "step-line";
+  return "";
+}
+
+async function runJob(id) {
+  const box = $("#jobLog");
+  box.innerHTML = "";
+  $("#jobPill").className = "pill wait"; $("#jobPill").textContent = "进行中";
+  const closeBtn = $("#jobClose");
+  closeBtn.disabled = true; closeBtn.textContent = "请稍候…";
+  openModal("#jobModal");
+  let since = 0, failures = 0;
+  while (true) {
+    try {
+      const r = await api("GET", `api/jobs/${id}?since=${since}`);
+      failures = 0;
+      $("#jobTitle").textContent = r.title;
+      for (const line of r.lines) {
+        const div = document.createElement("div");
+        div.className = logClass(line);
+        div.textContent = line;
+        box.appendChild(div);
+      }
+      since = r.next;
+      if (r.lines.length) box.scrollTop = box.scrollHeight;
+      if (r.done) {
+        $("#jobPill").className = r.ok ? "pill ok" : "pill bad";
+        $("#jobPill").textContent = r.ok ? "成功" : "失败";
+        break;
+      }
+    } catch (e) {
+      if (++failures > 20) { toast("err", "无法获取任务进度", e.message); break; }
+    }
+    await new Promise((res) => setTimeout(res, 1500));
+  }
+  closeBtn.disabled = false; closeBtn.textContent = "关闭";
+  closeBtn.onclick = () => closeModal("#jobModal");
+  load(); loadStatus();
+}
+// 任务进行中不允许点背景关闭日志窗口
+$("#jobModal").addEventListener("click", (e) => { if ($("#jobClose").disabled) e.stopImmediatePropagation(); }, true);
+
+// ---------- 用户流量 ----------
+// 字节数坐标轴：选单位，再取 1/2/5×10ⁿ 的整齐刻度
+function byteTicks(max) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, scaled = Math.max(max, 1);
+  while (scaled >= 1024 && i < units.length - 1) { scaled /= 1024; i++; }
+  const raw = scaled / 4, pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => s >= raw);
+  const top = Math.ceil(scaled / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
+  const factor = Math.pow(1024, i);
+  return { top: top * factor, ticks: ticks.map((v) => ({ value: v * factor, label: v === 0 ? "0" : `${+v.toFixed(2)} ${units[i]}` })) };
+}
+
+// 顶端 4px 圆角、底端方角的柱段
+function colPath(x, y, w, h, roundTop) {
+  if (h <= 0) return "";
+  const r = roundTop ? Math.min(4, w / 2, h) : 0;
+  return `M${x},${y + h}V${y + r}${r ? `Q${x},${y} ${x + r},${y}` : ""}H${x + w - r}${r ? `Q${x + w},${y} ${x + w},${y + r}` : ""}V${y + h}Z`;
+}
+
+function drawDaily(daily) {
+  const W = 640, H = 220, L = 58, R = 8, T = 10, B = 26;
+  const pw = W - L - R, ph = H - T - B;
+  const max = Math.max(...daily.map((d) => d.up + d.down));
+  const { top, ticks } = byteTicks(max);
+  const slot = pw / daily.length, bw = Math.min(14, slot - 4), GAP = 2;
+  const y = (v) => T + ph - (v / top) * ph;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="最近 30 天每日流量，下载与上传堆叠柱状图">`;
+  for (const t of ticks) {
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y(t.value)}" y2="${y(t.value)}" stroke="${t.value === 0 ? "var(--axis)" : "var(--grid)"}" stroke-width="1"/>`;
+    svg += `<text class="tick" x="${L - 8}" y="${y(t.value) + 4}" text-anchor="end">${t.label}</text>`;
+  }
+  daily.forEach((d, i) => {
+    const x = L + i * slot + (slot - bw) / 2;
+    const hDown = (d.down / top) * ph, hUp = (d.up / top) * ph;
+    const yDown = T + ph - hDown;
+    // 下载在下、上传在上，两段之间留 2px 表面色空隙；只有最上面一段圆角
+    svg += `<path d="${colPath(x, yDown, bw, hDown, hUp < 0.5)}" fill="var(--s1)"/>`;
+    if (hUp >= 0.5) svg += `<path d="${colPath(x, yDown - hUp - (hDown > 0 ? GAP : 0), bw, hUp, true)}" fill="var(--s2)"/>`;
+    if (i % 5 === 4 || i === daily.length - 1)
+      svg += `<text class="tick" x="${L + i * slot + slot / 2}" y="${H - 8}" text-anchor="middle">${d.day.slice(5).replace("-", "/")}</text>`;
+    svg += `<rect data-i="${i}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  svg += "</svg>";
+  const box = $("#trChart");
+  box.querySelectorAll("svg").forEach((s) => s.remove());
+  box.insertAdjacentHTML("afterbegin", svg);
+  const tip = $("#trTip");
+  box.querySelector("svg").onmousemove = (e) => {
+    const r = e.target.closest("rect[data-i]");
+    if (!r) { tip.style.display = "none"; return; }
+    const d = daily[+r.dataset.i];
+    tip.innerHTML = `<b>${d.day}</b><i style="background:var(--s1)"></i>下载 <span>${fmtBytes(d.down)}</span><br>`
+      + `<i style="background:var(--s2)"></i>上传 <span>${fmtBytes(d.up)}</span><br>合计 <span>${fmtBytes(d.up + d.down)}</span>`;
+    tip.style.display = "block";
+    const bx = box.getBoundingClientRect();
+    const left = Math.min(e.clientX - bx.left + 12, bx.width - tip.offsetWidth - 4);
+    tip.style.left = `${Math.max(0, left)}px`;
+    // 上方放不下（靠近弹窗顶部）时改放到指针下方
+    const above = e.clientY - bx.top - tip.offsetHeight - 10;
+    tip.style.top = `${e.clientY - tip.offsetHeight - 10 < 8 ? e.clientY - bx.top + 16 : above}px`;
+  };
+  box.querySelector("svg").onmouseleave = () => (tip.style.display = "none");
+}
+
+async function showTraffic(name) {
+  let d;
+  try { d = await api("GET", `api/users/${encodeURIComponent(name)}/traffic`); }
+  catch (e) { toast("err", "获取流量失败", e.message); return; }
+  $("#trTitle").textContent = `流量 · ${d.name}`;
+  const tile = (k, [up, down]) => `<div class="tile"><div class="k">${k}</div><div class="v">${fmtBytes(up + down)}</div>`
+    + `<div class="d">↑ ${fmtBytes(up)} · ↓ ${fmtBytes(down)}</div></div>`;
+  $("#trTiles").innerHTML = tile("本月", d.month) + tile("上月", d.last_month) + tile("累计", d.all);
+  drawDaily(d.daily);
+  $("#trDaily").innerHTML = `<table><thead><tr><th>日期</th><th>下载</th><th>上传</th><th>合计</th></tr></thead><tbody>`
+    + d.daily.slice().reverse().filter((x) => x.up + x.down > 0)
+      .map((x) => `<tr><td>${x.day}</td><td>${fmtBytes(x.down)}</td><td>${fmtBytes(x.up)}</td><td>${fmtBytes(x.up + x.down)}</td></tr>`).join("")
+    + `</tbody></table>`;
+  $("#trNodes").innerHTML = d.by_node.length
+    ? `<table><thead><tr><th>节点</th><th>下载</th><th>上传</th><th>合计</th></tr></thead><tbody>`
+      + d.by_node.map((x) => `<tr><td>${esc(x.node)}</td><td>${fmtBytes(x.down)}</td><td>${fmtBytes(x.up)}</td><td>${fmtBytes(x.up + x.down)}</td></tr>`).join("")
+      + `</tbody></table>`
+    : `<p class="muted" style="font-size:13px;margin:4px 0">本月还没有使用记录</p>`;
+  openModal("#trafficModal");
+}
+
+// ---------- 域名管理 ----------
+const domResults = {};  // 每个域名最近一次检测结果，重新渲染时保留
+
+function renderDomains() {
+  $("#domList").innerHTML = (state.domains || []).map((d) => {
+    const r = domResults[d.zone];
+    return `<tr data-zone="${esc(d.zone)}">
+      <td>${esc(d.zone)} ${d.default ? `<span class="badge managed">默认</span>` : ""}
+        ${d.note ? `<div class="dom-used">${esc(d.note)}</div>` : ""}
+        ${r ? `<div class="dom-result ${r.ok ? "ok" : "err"}">${esc(r.text)}</div>` : ""}</td>
+      <td class="dom-used">${d.used_by.length ? esc(d.used_by.join("、")) : "未使用"}</td>
+      <td><div class="dom-actions">
+        <button class="btn sm ghost" data-dom="check">检测</button>
+        <button class="btn sm ghost" data-dom="token">更换 Token</button>
+        ${d.default ? "" : `<button class="btn sm ghost" data-dom="default">设为默认</button>`}
+        ${d.used_by.length || d.default ? "" : `<button class="btn sm ghost danger" data-dom="del">删除</button>`}
+      </div></td>
+    </tr>`;
+  }).join("");
+}
+
+async function domainCall(method, path, body, okText) {
+  busy(true, "正在验证 Cloudflare Token…", false);
+  try {
+    const res = await api(method, path, body);
+    state = res.state; render(); renderDomains();
+    toast("ok", okText, res.log);
+    return true;
+  } catch (e) {
+    toast("err", "操作失败", e.message);
+    return false;
+  } finally {
+    busy(false);
+  }
+}
+
+$("#domBtn").onclick = () => { $("#domForm").reset(); renderDomains(); openModal("#domModal"); };
+
+$("#domForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const zone = $("#dZone").value.trim().toLowerCase();
+  const ok = await domainCall("POST", "api/domains", { zone, token: $("#dToken").value.trim(), note: $("#dNote").value.trim() }, `已添加 ${zone}`);
+  $("#dToken").value = "";  // 不在页面上留存 Token
+  if (ok) $("#domForm").reset();
+};
+
+let tokZone = null;
+$("#tokForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const token = $("#tToken").value.trim();
+  $("#tToken").value = "";
+  closeModal("#tokModal");
+  await domainCall("POST", `api/domains/${encodeURIComponent(tokZone)}/token`, { token }, `${tokZone} 的 Token 已更换`);
+};
+
+$("#domList").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-dom]");
+  if (!b) return;
+  const zone = b.closest("tr").dataset.zone;
+  const act = b.dataset.dom;
+  if (act === "check") {
+    b.disabled = true; b.textContent = "检测中…";
+    try {
+      const r = await api("GET", `api/domains/${encodeURIComponent(zone)}/check`);
+      domResults[zone] = { ok: r.ok, text: r.ok ? r.log.split("\n").map((l) => "✓ " + l).join("\n") : "✗ " + r.log };
+    } catch (err) { domResults[zone] = { ok: false, text: "✗ " + err.message }; }
+    renderDomains();
+  } else if (act === "token") {
+    tokZone = zone;
+    $("#tokTitle").textContent = `更换 Token · ${zone}`;
+    $("#tToken").value = "";
+    openModal("#tokModal");
+    setTimeout(() => $("#tToken").focus(), 50);
+  } else if (act === "default") {
+    domainCall("POST", `api/domains/${encodeURIComponent(zone)}/default`, {}, `默认域名已改为 ${zone}`);
+  } else if (act === "del") {
+    if (await confirmBox("删除域名", `从列表中删除 <b>${esc(zone)}</b>，并删除订阅服务器上保存的 Token？<br><br>Cloudflare 里的 Token 和 DNS 记录不受影响，需要的话请自行到 Cloudflare 删除。`, "删除", true)) {
+      delete domResults[zone];
+      domainCall("DELETE", `api/domains/${encodeURIComponent(zone)}`, {}, `已删除 ${zone}`);
+    }
+  }
+});
+
+// ---------- 版本管理 ----------
+let releaseInfo = null;
+async function loadReleases(refresh) {
+  try { releaseInfo = await api("GET", "api/versions" + (refresh ? "?refresh=1" : "")); }
+  catch (e) { if (refresh) toast("err", "获取版本信息失败", e.message); }
+  renderNodes();
+  return releaseInfo;
+}
+
+function startUpgrade(names, version) {
+  return api("POST", "api/nodes/upgrade", { names, version }).then(({ job }) => runJob(job));
+}
+
+function renderVerModal() {
+  const r = releaseInfo;
+  $("#verLatest").textContent = r ? r.latest + (r.stale ? "（缓存）" : "") : "无法获取";
+  $("#verSelect").innerHTML = r ? r.stable.map((v) => `<option value="${esc(v)}">${esc(v)}${v === r.latest ? "（最新）" : ""}</option>`).join("") : "";
+  if (r) $("#verSelect").value = r.latest;
+  const target = $("#verSelect").value;
+  $("#verList").innerHTML = state.nodes.map((n) => {
+    const s = statuses && statuses.find((x) => x.name === n.name);
+    const cur = s && s.reachable ? s.version : "未知";
+    return `<label class="ver-item"><input type="checkbox" value="${esc(n.name)}" ${cur !== target && cur !== "未知" ? "checked" : ""}>
+      <span class="nm">${esc(n.name)}</span><span class="cur">${esc(cur)}</span></label>`;
+  }).join("");
+}
+$("#verSelect").addEventListener("change", () => {
+  const target = $("#verSelect").value;
+  document.querySelectorAll("#verList input").forEach((cb) => {
+    cb.checked = cb.closest(".ver-item").querySelector(".cur").textContent !== target;
+  });
+});
+$("#verBtn").onclick = () => { renderVerModal(); openModal("#verModal"); };
+$("#verRefresh").onclick = async () => { await loadReleases(true); renderVerModal(); };
+$("#verForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const names = [...document.querySelectorAll("#verList input:checked")].map((cb) => cb.value);
+  if (!names.length) { toast("warn", "请至少选择一个节点"); return; }
+  closeModal("#verModal");
+  try { await startUpgrade(names, $("#verSelect").value); } catch (err) { toast("err", "无法开始升级", err.message); }
+};
+
+$("#nodes").addEventListener("click", async (e) => {
+  if (e.target.closest("[data-upgrade-node]")) {
+    const name = e.target.closest("[data-node]").dataset.node;
+    if (await confirmBox("升级 sing-box", `把 <b>${esc(name)}</b> 升级到 <b>${esc(releaseInfo.latest)}</b>？<br><br>节点会重启几秒，现有配置保持不变；新版本启动失败会自动回滚。`, "升级"))
+      startUpgrade([name], releaseInfo.latest).catch((err) => toast("err", "无法开始升级", err.message));
+    return;
+  }
+  if (!e.target.closest("[data-remove-node]")) return;
+  const name = e.target.closest("[data-node]").dataset.node;
+  if (!(await confirmBox("移除节点", `从订阅中移除 <b>${esc(name)}</b>？<br><br>只是不再管理和下发这个节点：服务器上的 sing-box、DNS 解析和证书都保持原样，需要的话请自行清理。`, "移除", true))) return;
+  try {
+    const res = await api("DELETE", `api/nodes/${encodeURIComponent(name)}`, {});
+    state = res.state; render(); toast("ok", `节点 ${name} 已移除`, res.log); loadStatus();
+  } catch (err) { toast("err", "移除失败", err.message); }
+});
+
+// ---------- 订阅弹窗 ----------
+function showSub(u) {
+  $("#subTitle").textContent = `订阅 · ${u.name}`;
+  const entries = Object.entries(u.links);
+  $("#subLinks").innerHTML = entries.map(([label, link], i) => `
+    <div class="link-row" data-i="${i}">
+      <div class="lbl">${esc(label)}<span class="spacer"></span>
+        <button class="btn sm ghost" data-copy="${i}">复制</button></div>
+      <code>${esc(link)}</code>
+    </div>`).join("");
+  const select = (i) => {
+    document.querySelectorAll(".link-row").forEach((r) => r.classList.toggle("active", +r.dataset.i === i));
+    $("#qrImg").src = "api/qr?text=" + encodeURIComponent(entries[i][1]);
+    $("#qrCap").textContent = `扫码导入：${entries[i][0]}`;
+  };
+  $("#subLinks").onclick = async (e) => {
+    const c = e.target.closest("[data-copy]");
+    if (c) {
+      e.stopPropagation();
+      await copy(entries[+c.dataset.copy][1]);
+      c.textContent = "已复制";
+      setTimeout(() => (c.textContent = "复制"), 1500);
+      return;
+    }
+    const row = e.target.closest(".link-row");
+    if (row) select(+row.dataset.i);
+  };
+  select(0);
+  openModal("#subModal");
+}
+
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const t = document.createElement("textarea");
+    t.value = text; document.body.appendChild(t); t.select();
+    document.execCommand("copy"); t.remove();
+  }
+}
+
+load();
+loadStatus();
+loadReleases(false);
+</script>
+</body>
+</html>
