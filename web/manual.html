@@ -90,6 +90,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <a class="sub" href="#add">新增用户并发给对方</a>
   <a class="sub" href="#lifecycle">停用、删除、重置</a>
   <a class="sub" href="#pool">账号池与每日维护</a>
+  <a href="#groups">订阅里的代理组</a>
   <a href="#traffic">流量统计</a>
   <a href="#nodes">3. 节点管理</a>
   <a class="sub" href="#deploy">一键部署新服务器</a>
@@ -158,6 +159,27 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <li>每天 <b>04:00（北京时间）</b> 自动维护：清理待清理账号、把账号池补满 20 个，并推送到节点。<b>只有账号有变化的节点会重启</b>，没变化的不动。</li>
 </ul>
 <p>账号池用完（一天内新增超过 20 人）时，新增用户会提示需要重启节点，同时把账号池补满。想马上清理，可以点控制台顶部的 <b>同步节点</b>，效果和夜间维护一样。</p>
+</section>
+
+<section id="groups">
+<h2>订阅里的代理组</h2>
+<p>sing-box / Hiddify 和 Clash 系客户端拿到的订阅都带有以下代理组（参照常见的 ACL4SSR 精简分组），用户导入后无需设置：</p>
+<div class="table-wrap"><table>
+  <tr><th>代理组</th><th>类型</th><th>默认</th><th>说明</th></tr>
+  <tr><td>🚀 节点选择</td><td>手动</td><td>♻️ 自动选择</td><td>主出口；可切换到地区组或具体节点</td></tr>
+  <tr><td>♻️ 自动选择</td><td>测速</td><td>延迟最低</td><td>每 5 分钟测一次，所有节点</td></tr>
+  <tr><td>🔯 故障转移</td><td>故障转移</td><td>第一个可用</td><td>仅 Clash（sing-box 没有这种类型）</td></tr>
+  <tr><td>🇯🇵 日本节点 等地区组</td><td>测速</td><td>延迟最低</td><td>按<b>节点名称</b>自动归类，见下文</td></tr>
+  <tr><td>🤖 AI 服务</td><td>手动</td><td>🇺🇸 美国节点</td><td>ChatGPT、Claude、Gemini 等（规则 <code>category-ai-!cn</code>）；没有美国节点时默认节点选择</td></tr>
+  <tr><td>📹 YouTube / 🎥 Netflix / 📲 Telegram</td><td>手动</td><td>🚀 节点选择</td><td>可为某项服务单独指定节点</td></tr>
+  <tr><td>Ⓜ️ 微软服务 / 🍎 苹果服务</td><td>手动</td><td>直连</td><td>国内可直连且更快</td></tr>
+  <tr><td>🛑 广告拦截</td><td>手动</td><td>拦截</td><td>规则 <code>category-ads-all</code>；sing-box 里固定为拦截（新版 sing-box 没有可切换的拦截出站）</td></tr>
+  <tr><td>🎯 全球直连</td><td>手动</td><td>直连</td><td>国内网站与 IP</td></tr>
+  <tr><td>🐟 漏网之鱼</td><td>手动</td><td>🚀 节点选择</td><td>以上都没匹配到的流量</td></tr>
+</table></div>
+<p><b>地区组如何生成：</b>按节点名称识别地区（不区分大小写）：<code>HK</code>/香港、<code>TW</code>/台湾、<code>JP</code>/<code>Tokyo</code>/日本、<code>SG</code>/新加坡、<code>KR</code>/韩国、<code>US</code>/美国 等；名称里的地区缩写要独立出现，例如 <code>JP-Tokyo-01</code>、<code>US-LA-01</code>。只有有节点的地区才会出现。给节点起名时按这个习惯即可，识别不到的节点只出现在「节点选择」里。</p>
+<p><b>规则数据：</b>统一使用 MetaCubeX/meta-rules-dat（sing-box 用其 <code>.srs</code> 规则集、Clash Meta 用同源的 geosite/geoip），由客户端通过节点自动下载和更新。Shadowrocket 拿到的是节点列表，使用 App 自带的分流规则。</p>
+<p><b>修改分组：</b>分组定义在 <code>/usr/local/bin/sbm</code> 的 <code>REGIONS</code> 和 <code>SERVICES</code> 里，改完运行 <code>sudo sbm build</code> 重新生成订阅即可，不会重启节点；用户的客户端下次更新订阅时生效。</p>
 </section>
 
 <section id="traffic">

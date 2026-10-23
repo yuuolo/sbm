@@ -69,6 +69,8 @@ ol.steps li { margin: 6px 0; }
 .link-box code { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; color: var(--muted); }
 .nodes { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
 .nodes span { background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 2px 10px; font-size: 13.5px; font-weight: 600; }
+ul.groups { padding-left: 20px; margin: 6px 0; }
+ul.groups li { margin: 5px 0; font-size: 14px; }
 details { border-bottom: 1px solid var(--border); padding: 10px 0; }
 details:last-child { border-bottom: none; }
 summary { cursor: pointer; font-weight: 600; }
@@ -147,7 +149,7 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
         <li>点「一键导入」，在 sing-box 里确认导入。</li>
         <li>没反应的话：复制订阅链接 → 打开 sing-box → <b>配置（Profiles）</b> → <b>新建配置</b> → 类型选 <b>远程（Remote）</b> → 粘贴链接 → 打开「自动更新」→ 保存。</li>
         <li>回到 <b>仪表盘（Dashboard）</b>，选中这个配置，点 <b>启用（Enable）</b>，允许添加 VPN。</li>
-        <li>在 <b>分组（Groups）</b> 里可以切换节点。</li>
+        <li>在 <b>分组（Groups）</b> 里可以切换节点，例如在「🚀 节点选择」里固定某个节点。</li>
       </ol>
     </div>
 
@@ -160,7 +162,7 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
         <li>先打开 Clash Verge Rev，再点「一键导入」，浏览器询问是否打开应用时选择允许。</li>
         <li>没反应的话：复制订阅链接 → Clash Verge Rev 左侧 <b>订阅</b> → 顶部输入框粘贴 → 点 <b>导入</b>。</li>
         <li>点一下刚导入的订阅卡片，让它处于选中状态。</li>
-        <li>左侧 <b>代理</b> → 在 <b>PROXY</b> 分组里选一个节点。</li>
+        <li>左侧 <b>代理</b> 页可以看到各个分组，默认已经设置好，一般不用改；想固定节点就在 <b>🚀 节点选择</b> 里选。</li>
         <li>左侧 <b>设置</b> → 打开 <b>系统代理</b>。部分软件不走系统代理时，可以改为打开 <b>虚拟网卡模式（TUN）</b>。</li>
       </ol>
     </div>
@@ -174,7 +176,7 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
         <li>点「一键导入」，在应用里确认。</li>
         <li>没反应的话：复制订阅链接 → <b>配置</b> → 右下角 <b>＋</b> → <b>URL</b> → 粘贴链接 → 提交。</li>
         <li>选中这个配置，回到首页点 <b>启动</b>，允许添加 VPN。</li>
-        <li>在 <b>代理</b> 页的 PROXY 分组里切换节点。</li>
+        <li>在 <b>代理</b> 页的 <b>🚀 节点选择</b> 分组里可以切换节点。</li>
       </ol>
     </div>
 
@@ -204,9 +206,18 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
 
   <div class="card">
     <h2><span class="num">4</span>连接与节点</h2>
-    <p>订阅里包含以下节点，任选一个即可；速度慢或连不上时换一个试试：</p>
+    <p>订阅里包含以下节点：</p>
     <div class="nodes" id="nodes"></div>
-    <p class="hint">国内网站和应用会自动直连，不受影响。客户端会每隔一段时间自动更新订阅，管理员新增节点后你无需任何操作。</p>
+    <p>导入后各个分组已经设置好，<b>一般不用任何改动</b>：</p>
+    <ul class="groups">
+      <li><b>🚀 节点选择</b>：默认是 ♻️ 自动选择（自动用延迟最低的节点）。想固定用某个节点或某个地区，就在这里切换。</li>
+      <li><b>🤖 AI 服务</b>：ChatGPT、Claude、Gemini 等默认走美国节点，避免地区限制。</li>
+      <li><b>📹 YouTube / 🎥 Netflix / 📲 Telegram</b>：默认跟随节点选择，也可以单独指定节点。</li>
+      <li><b>Ⓜ️ 微软服务 / 🍎 苹果服务</b>：默认直连，速度更快；个别功能打不开时可以切到节点选择。</li>
+      <li><b>🛑 广告拦截</b>：默认拦截常见广告域名；如果某个网站因此打不开，可以切换为直连。</li>
+      <li><b>🎯 全球直连</b>：国内网站和应用直连，不受影响。</li>
+    </ul>
+    <p class="hint">Shadowrocket 使用 App 自带的分流规则，只需在首页选择节点。客户端会每隔一段时间自动更新订阅，管理员新增节点后你无需任何操作。</p>
   </div>
 
   <div class="card">

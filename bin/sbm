@@ -856,17 +856,116 @@ def outbound_singbox(node, user):
     }
 
 
+# ---------- 代理组与分流（sing-box 与 Clash 共用同一份规划） ----------
+# 参照常见的 ACL4SSR 精简分组；规则数据统一用 MetaCubeX/meta-rules-dat，
+# sing-box 用其 .srs 规则集，Clash Meta 用同源的 geosite/geoip 数据，两边分类一致。
+
+G_PROXY, G_AUTO, G_FALLBACK = "🚀 节点选择", "♻️ 自动选择", "🔯 故障转移"
+G_ADS, G_DIRECT, G_FINAL = "🛑 广告拦截", "🎯 全球直连", "🐟 漏网之鱼"
+TEST_URL = "https://www.gstatic.com/generate_204"
+RULESET_URL = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/{kind}/{name}.srs"
+
+# 按节点名称自动归入地区组（取第一个匹配的地区；匹配不到的节点只出现在节点选择里）
+REGIONS = [
+    ("🇭🇰 香港节点", r"香港|(^|[^a-z])(hk|hong ?kong)([^a-z]|$)"),
+    ("🇹🇼 台湾节点", r"台湾|(^|[^a-z])(tw|taiwan|taipei)([^a-z]|$)"),
+    ("🇯🇵 日本节点", r"日本|东京|大阪|(^|[^a-z])(jp|japan|tokyo|osaka)([^a-z]|$)"),
+    ("🇸🇬 新加坡节点", r"新加坡|狮城|(^|[^a-z])(sg|singapore)([^a-z]|$)"),
+    ("🇰🇷 韩国节点", r"韩国|首尔|(^|[^a-z])(kr|korea|seoul)([^a-z]|$)"),
+    ("🇺🇸 美国节点", r"美国|(^|[^a-z])(us|usa|america|los ?angeles|san ?jose|seattle)([^a-z]|$)"),
+]
+
+# 分流服务组：(组名, 默认选项, geosite 列表, geoip 列表)
+# 默认选项："proxy" 走节点选择，"direct" 直连，"region:<组名>" 优先该地区（没有该地区节点时退回节点选择）
+SERVICES = [
+    ("🤖 AI 服务", "region:🇺🇸 美国节点", ["category-ai-!cn"], []),
+    ("📹 YouTube", "proxy", ["youtube"], []),
+    ("🎥 Netflix", "proxy", ["netflix"], ["netflix"]),
+    ("📲 Telegram", "proxy", ["telegram"], ["telegram"]),
+    ("Ⓜ️ 微软服务", "direct", ["microsoft"], []),
+    ("🍎 苹果服务", "direct", ["apple"], []),
+]
+
+
+def group_plan(conf):
+    """返回 (地区组 [(组名, [节点名])], 服务组 [(组名, [选项...默认在第一个], geosite, geoip)])。
+    选项里用 "DIRECT" 表示直连，由各格式自己换成对应的写法。"""
+    names = [n["name"] for n in conf["nodes"]]
+    regions, used = [], set()
+    for title, pattern in REGIONS:
+        members = [n for n in names if n not in used and re.search(pattern, n, re.I)]
+        if members:
+            regions.append((title, members))
+            used.update(members)
+    region_titles = [r[0] for r in regions]
+    pool = [G_PROXY, G_AUTO, *region_titles, *names]
+    services = []
+    for title, default, geosite, geoip in SERVICES:
+        if default == "direct":
+            options = ["DIRECT", *pool]
+        elif default.startswith("region:") and default[7:] in region_titles:
+            first = default[7:]
+            options = [first, *[x for x in pool if x != first], "DIRECT"]
+        else:
+            options = [*pool, "DIRECT"]
+        services.append((title, options, geosite, geoip))
+    return regions, services
+
+
 def build_singbox(conf, user):
     nodes = conf["nodes"]
-    rule_set_url = "https://raw.githubusercontent.com/SagerNet/{repo}/rule-set/{tag}.srs"
+    names = [n["name"] for n in nodes]
+    regions, services = group_plan(conf)
+    sb = lambda x: "direct" if x == "DIRECT" else x  # noqa: E731
+
+    def urltest(tag, members):
+        if not members:  # 还没有节点时 urltest 不能为空，先占位为直连
+            return {"type": "selector", "tag": tag, "outbounds": ["direct"]}
+        return {"type": "urltest", "tag": tag, "outbounds": members, "url": TEST_URL, "interval": "5m", "tolerance": 50}
+    rule_sets = {}
+
+    def rs(kind, name):
+        tag = f"{kind}-{name}"
+        rule_sets[tag] = {"type": "remote", "tag": tag, "format": "binary",
+                          "url": RULESET_URL.format(kind=kind, name=name), "download_detour": G_PROXY}
+        return tag
+
+    route_rules = [
+        {"action": "sniff"},
+        {"protocol": "dns", "action": "hijack-dns"},
+        {"ip_is_private": True, "outbound": "direct"},
+        {"rule_set": [rs("geosite", "private")], "outbound": "direct"},
+        # sing-box 1.11 起没有可选的 block 出站，广告直接拒绝
+        {"rule_set": [rs("geosite", "category-ads-all")], "action": "reject"},
+    ]
+    for title, _options, geosite, geoip in services:
+        route_rules.append({"rule_set": [rs("geosite", g) for g in geosite] + [rs("geoip", g) for g in geoip],
+                            "outbound": title})
+    route_rules += [
+        {"rule_set": [rs("geosite", "geolocation-!cn")], "outbound": G_PROXY},
+        {"rule_set": [rs("geosite", "cn"), rs("geoip", "cn")], "outbound": G_DIRECT},
+    ]
+    region_titles = [r[0] for r in regions]
+    outbounds = [
+        {"type": "selector", "tag": G_PROXY, "outbounds": [G_AUTO, *region_titles, *names, "direct"], "default": G_AUTO},
+        urltest(G_AUTO, names),
+        *[urltest(title, members) for title, members in regions],
+        *[{"type": "selector", "tag": title, "outbounds": [sb(o) for o in options], "default": sb(options[0])}
+          for title, options, _gs, _gi in services],
+        {"type": "selector", "tag": G_DIRECT, "outbounds": ["direct", G_PROXY], "default": "direct"},
+        {"type": "selector", "tag": G_FINAL, "outbounds": [G_PROXY, "direct", G_AUTO, *region_titles, *names],
+         "default": G_PROXY},
+        *[outbound_singbox(n, user) for n in nodes],
+        {"type": "direct", "tag": "direct"},
+    ]
     return {
         "log": {"level": "warn"},
         "dns": {
             "servers": [
-                {"type": "https", "tag": "remote", "server": "1.1.1.1", "detour": "proxy"},
+                {"type": "https", "tag": "remote", "server": "1.1.1.1", "detour": G_PROXY},
                 {"type": "https", "tag": "local", "server": "223.5.5.5"},
             ],
-            "rules": [{"rule_set": "geosite-cn", "server": "local"}],
+            "rules": [{"rule_set": ["geosite-cn", "geosite-private"], "server": "local"}],
             "final": "remote",
             "strategy": "prefer_ipv4",
         },
@@ -877,28 +976,15 @@ def build_singbox(conf, user):
             "auto_route": True,
             "strict_route": True,
         }],
-        "outbounds": [
-            {"type": "selector", "tag": "proxy", "outbounds": [n["name"] for n in nodes] + ["direct"]},
-            *[outbound_singbox(n, user) for n in nodes],
-            {"type": "direct", "tag": "direct"},
-        ],
+        "outbounds": outbounds,
         "route": {
-            "rules": [
-                {"action": "sniff"},
-                {"protocol": "dns", "action": "hijack-dns"},
-                {"ip_is_private": True, "outbound": "direct"},
-                {"rule_set": ["geosite-cn", "geoip-cn"], "outbound": "direct"},
-            ],
-            "rule_set": [
-                {"type": "remote", "tag": "geosite-cn", "format": "binary",
-                 "url": rule_set_url.format(repo="sing-geosite", tag="geosite-cn"), "download_detour": "proxy"},
-                {"type": "remote", "tag": "geoip-cn", "format": "binary",
-                 "url": rule_set_url.format(repo="sing-geoip", tag="geoip-cn"), "download_detour": "proxy"},
-            ],
-            "final": "proxy",
+            "rules": route_rules,
+            "rule_set": list(rule_sets.values()),
+            "final": G_FINAL,
             "auto_detect_interface": True,
             "default_domain_resolver": "local",
         },
+        # cache_file 让客户端记住每个代理组的选择
         "experimental": {"cache_file": {"enabled": True}},
     }
 
@@ -924,7 +1010,7 @@ def build_clash(conf, user):
         "  default-nameserver: [223.5.5.5, 119.29.29.29]",
         "  nameserver: [https://dns.alidns.com/dns-query, https://doh.pub/dns-query]",
         "  nameserver-policy:",
-        "    \"geosite:geolocation-!cn\": [\"https://1.1.1.1/dns-query#PROXY\"]",
+        f"    \"geosite:geolocation-!cn\": [{q('https://1.1.1.1/dns-query#' + G_PROXY)}]",
         "proxies:",
     ]
     for n in conf["nodes"]:
@@ -939,18 +1025,37 @@ def build_clash(conf, user):
             "    skip-cert-verify: false",
             "    udp: true",
         ]
-    lines += [
-        "proxy-groups:",
-        "  - name: PROXY",
-        "    type: select",
-        "    proxies: [" + ", ".join(q(n["name"]) for n in conf["nodes"]) + ", DIRECT]",
-        "rules:",
-        "  - GEOSITE,private,DIRECT",
-        "  - GEOIP,private,DIRECT,no-resolve",
-        "  - GEOSITE,cn,DIRECT",
-        "  - GEOIP,CN,DIRECT",
-        "  - MATCH,PROXY",
-    ]
+    names = [n["name"] for n in conf["nodes"]]
+    regions, services = group_plan(conf)
+    region_titles = [r[0] for r in regions]
+    flow = lambda items: "[" + ", ".join(q(x) for x in items) + "]"  # noqa: E731
+
+    def group(name, kind, members, test=False):
+        if not members:  # 还没有节点时代理组不能为空，先占位为直连
+            kind, members, test = "select", ["DIRECT"], False
+        out = [f"  - name: {q(name)}", f"    type: {kind}", f"    proxies: {flow(members)}"]
+        if test:
+            out += [f"    url: {q(TEST_URL)}", "    interval: 300"] + (["    tolerance: 50"] if kind == "url-test" else [])
+        return out
+
+    lines.append("proxy-groups:")
+    lines += group(G_PROXY, "select", [G_AUTO, G_FALLBACK, *region_titles, *names, "DIRECT"])
+    lines += group(G_AUTO, "url-test", names, test=True)
+    lines += group(G_FALLBACK, "fallback", names, test=True)
+    for title, members in regions:
+        lines += group(title, "url-test", members, test=True)
+    for title, options, _gs, _gi in services:
+        lines += group(title, "select", options)
+    lines += group(G_ADS, "select", ["REJECT", "DIRECT"])
+    lines += group(G_DIRECT, "select", ["DIRECT", G_PROXY])
+    lines += group(G_FINAL, "select", [G_PROXY, "DIRECT", G_AUTO, *region_titles, *names])
+
+    rules = ["GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve", f"GEOSITE,category-ads-all,{G_ADS}"]
+    for title, _options, geosite, geoip in services:
+        rules += [f"GEOSITE,{g},{title}" for g in geosite] + [f"GEOIP,{g},{title},no-resolve" for g in geoip]
+    rules += [f"GEOSITE,geolocation-!cn,{G_PROXY}", f"GEOSITE,cn,{G_DIRECT}", f"GEOIP,CN,{G_DIRECT}", f"MATCH,{G_FINAL}"]
+    lines.append("rules:")
+    lines += [f"  - {q(r)}" for r in rules]
     return "\n".join(lines) + "\n"
 
 
