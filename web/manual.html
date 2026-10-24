@@ -91,6 +91,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <a class="sub" href="#lifecycle">停用、删除、重置</a>
   <a class="sub" href="#pool">账号池与每日维护</a>
   <a href="#groups">订阅里的代理组</a>
+  <a href="#rules">分流规则详解与来源</a>
   <a href="#traffic">流量统计</a>
   <a href="#nodes">3. 节点管理</a>
   <a class="sub" href="#deploy">一键部署新服务器</a>
@@ -179,9 +180,60 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <tr><td>🐟 漏网之鱼</td><td>手动</td><td>🚀 节点选择</td><td>以上都没匹配到的流量</td></tr>
 </table></div>
 <p><b>地区组如何生成：</b>按节点名称识别地区（不区分大小写）：<code>HK</code>/香港、<code>TW</code>/台湾、<code>JP</code>/<code>Tokyo</code>/日本、<code>SG</code>/新加坡、<code>KR</code>/韩国、<code>US</code>/美国 等；名称里的地区缩写要独立出现，例如 <code>JP-Tokyo-01</code>、<code>US-LA-01</code>。只有有节点的地区才会出现。给节点起名时按这个习惯即可，识别不到的节点只出现在「节点选择」里。</p>
-<p><b>规则数据：</b>统一使用 MetaCubeX/meta-rules-dat（sing-box 用其 <code>.srs</code> 规则集、Clash Meta 用同源的 geosite/geoip），由客户端通过节点自动下载和更新。Shadowrocket 拿到的是节点列表，使用 App 自带的分流规则。</p>
+<p><b>规则数据：</b>统一使用 MetaCubeX/meta-rules-dat（sing-box 用其 <code>.srs</code> 规则集、Clash Meta 用同源的 geosite/geoip），由客户端通过节点自动下载和更新。Shadowrocket 拿到的是节点列表，使用 App 自带的分流规则。每条规则的内容和来源见下一节。</p>
 <p><b>查看实际内容：</b>控制台里点任一用户的 <b>配置</b>，或命令行 <code>sudo sbm user config 用户名</code>。</p>
 <p><b>修改分组：</b>分组定义在 <code>/usr/local/bin/sbm</code> 的 <code>REGIONS</code> 和 <code>SERVICES</code> 里，改完运行 <code>sudo sbm build</code> 重新生成订阅即可，不会重启节点；用户的客户端下次更新订阅时生效。</p>
+</section>
+
+<section id="rules">
+<h2>分流规则详解与来源</h2>
+<p>规则<b>从上到下依次匹配，命中第一条即停止</b>；sing-box 与 Clash 两种格式的规则和顺序完全一致。下表的数据规模为 2026 年 10 月的统计，上游每天更新，数量会略有变化。</p>
+<div class="table-wrap"><table>
+  <tr><th>#</th><th>匹配内容</th><th>去向</th><th>数据规模</th><th>内容示例</th><th>数据来源</th></tr>
+  <tr><td>1</td><td>局域网与私有地址<br><code>geosite:private</code>、私有 IP</td><td>直连</td><td>132 个域名、28 个 IP 段</td><td>路由器管理域名（<code>router.asus.com</code>、<code>tplogin.cn</code>）、<code>192.168.0.0/16</code></td><td>v2fly/domain-list-community 的 private 分类；IANA 保留地址段</td></tr>
+  <tr><td>2</td><td>广告<br><code>category-ads-all</code></td><td>🛑 广告拦截</td><td>约 900 个域名</td><td>doubleclick、adjust、taboola 等广告与统计 SDK</td><td>v2fly 社区表，汇总 category-ads 等 12 个子类</td></tr>
+  <tr><td>3</td><td>AI 服务<br><code>category-ai-!cn</code></td><td>🤖 AI 服务</td><td>约 200 个域名</td><td>ChatGPT / OpenAI、Claude / Anthropic、Gemini / NotebookLM、Perplexity、Grok、Cursor、GitHub Copilot、Hugging Face、Mistral、Midjourney 等</td><td>v2fly 社区表，汇总 openai、anthropic、google-deepmind、xai、perplexity、cursor 等 20 个子类及零散站点</td></tr>
+  <tr><td>4</td><td>YouTube</td><td>📹 YouTube</td><td>约 180 个域名</td><td><code>youtube.com</code>、<code>ytimg.com</code>、<code>youtu.be</code></td><td>v2fly 社区表</td></tr>
+  <tr><td>5</td><td>Netflix（域名 + IP）</td><td>🎥 Netflix</td><td>27 个域名、122 个 IP 段</td><td><code>netflix.com</code>、<code>nflxvideo.net</code>、<code>fast.com</code></td><td>域名：v2fly 社区表；IP：MaxMind GeoLite2 ASN 数据中 Netflix 自有网络</td></tr>
+  <tr><td>6</td><td>Telegram（域名 + IP）</td><td>📲 Telegram</td><td>21 个域名、12 个 IP 段</td><td><code>t.me</code>、<code>telegram.org</code>、<code>91.108.4.0/22</code></td><td>域名：v2fly 社区表；IP：Telegram 官方公布的地址段（core.telegram.org/resources/cidr.txt）+ ASN 数据</td></tr>
+  <tr><td>7</td><td>微软</td><td>Ⓜ️ 微软服务（默认直连）</td><td>约 750 个域名</td><td><code>microsoft.com</code>、Office CDN、Windows 更新</td><td>v2fly 社区表</td></tr>
+  <tr><td>8</td><td>苹果</td><td>🍎 苹果服务（默认直连）</td><td>约 1,800 个域名</td><td><code>apple.com</code>、iTunes、iCloud 相关</td><td>v2fly 社区表</td></tr>
+  <tr><td>9</td><td>境外网站<br><code>geolocation-!cn</code></td><td>🚀 节点选择</td><td>约 2.7 万个域名</td><td>常见的境外网站</td><td>GFWList + Loyalsoldier/domain-list-custom（由 v2fly 社区表展开）+ felixonmars 整理的 Google、Apple 在华域名 + 维护者补充；剔除 <code>.cn</code> 结尾的域名</td></tr>
+  <tr><td>10</td><td>国内网站与 IP<br><code>geosite:cn</code>、<code>geoip:cn</code></td><td>🎯 全球直连</td><td>约 11 万个域名、约 1 万个 IP 段</td><td>国内常见网站</td><td>域名：blackmatrix7/ios_rule_script 的 ChinaMax 国内域名表；IP：gaoyifan/china-operator-ip（根据国内运营商 BGP 路由生成，比 MaxMind 国家库更准）</td></tr>
+  <tr><td>11</td><td>以上都没有匹配到</td><td>🐟 漏网之鱼（默认节点选择）</td><td>—</td><td>—</td><td>—</td></tr>
+</table></div>
+
+<h3>数据的来源链路</h3>
+<p>v2fly/domain-list-community、Loyalsoldier/domain-list-custom、blackmatrix7/ios_rule_script、felixonmars/dnsmasq-china-list、GFWList、gaoyifan/china-operator-ip、MaxMind GeoLite2、Telegram 官方 → <b>Loyalsoldier/v2ray-rules-dat</b>（原始项目）→ <b>MetaCubeX/meta-rules-dat</b>（其分支，每天自动构建）→ 客户端经节点下载。sing-box 使用其 <code>sing</code> 分支的 <code>geo/</code>（完整版，不是 geo-lite）规则集；Clash Meta 使用同源的 geosite.dat / geoip.dat。</p>
+
+<h3>为什么是这个顺序（参照 ACL4SSR）</h3>
+<ul>
+  <li><b>广告在服务之前：</b>广告域名先被拦截，即使出现在 YouTube 等页面里。</li>
+  <li><b>具体服务在「境外网站」之前：</b>YouTube、AI 等域名同时也在境外列表里，放前面才能单独指定节点（例如 AI 走美国、YouTube 走日本）。</li>
+  <li><b>微软、苹果在「国内」之前：</b>它们在国内有 CDN，默认直连更快；境外的 Apple 服务直连一般也能正常访问。</li>
+  <li><b>境外在国内之前：</b>两个列表有少量重叠时以境外为准。</li>
+  <li><b>IP 规则：</b>主要用于按 IP 直接连接的程序（如 Telegram 客户端内置服务器 IP）；Clash 中 Netflix / Telegram 的 IP 规则带 <code>no-resolve</code>，不会为它们额外发起 DNS 查询。</li>
+</ul>
+
+<h3>DNS 策略</h3>
+<ul>
+  <li><b>sing-box：</b>已知境外域名用 1.1.1.1（DoH，经节点）解析；已知国内域名用 223.5.5.5（DoH）解析；<b>两个列表都没有的域名先问国内 DNS，结果是国内 IP 才采用，否则改用境外 DNS</b>（类似 ChinaDNS）。这样列表外的国内网站也能拿到国内 IP，按 <code>geoip:cn</code> 直连，而境外网站不会用到被污染的结果。</li>
+  <li><b>Clash：</b>fake-ip 模式；遇到需要按 IP 判断的规则时，默认用阿里 / 腾讯 DoH 解析，境外域名用 1.1.1.1（DoH，经节点）。</li>
+</ul>
+
+<h3>规则数据的更新</h3>
+<ul>
+  <li>上游 MetaCubeX/meta-rules-dat 每天自动构建。</li>
+  <li>sing-box：远程规则集默认每天更新一次。</li>
+  <li>Clash：订阅中开启了 <code>geo-auto-update</code>，每 24 小时更新一次 geosite / geoip。</li>
+</ul>
+
+<h3>已知局限</h3>
+<ul>
+  <li><b>广告拦截偏保守：</b>约 900 个域名，误伤少，但覆盖面远小于 AdGuard 等专门的拦截列表，国内视频网站的贴片广告基本拦不住。</li>
+  <li><b>依赖上游维护：</b>新出现的网站要等上游收录才会生效。个别网站分错时，用户可以在客户端临时切换对应的代理组；管理员可以在 <code>sbm</code> 的 <code>SERVICES</code> 里调整。</li>
+  <li><b>sing-box 版本兼容：</b>订阅里的「列表外域名先问国内 DNS」和规则集的 <code>download_detour</code> 用的是旧写法。sing-box 1.14 会提示它们已弃用，但 1.14、1.15 都能正常使用，1.16 起才会移除。新写法（<code>evaluate</code> + <code>match_response</code>）要求客户端至少是 1.14，现在改会让 1.12 / 1.13 的手机客户端和 Hiddify 无法导入，所以等主流客户端都升级到 1.14 以后再迁移。</li>
+</ul>
 </section>
 
 <section id="traffic">

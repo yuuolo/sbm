@@ -965,7 +965,15 @@ def build_singbox(conf, user):
                 {"type": "https", "tag": "remote", "server": "1.1.1.1", "detour": G_PROXY},
                 {"type": "https", "tag": "local", "server": "223.5.5.5"},
             ],
-            "rules": [{"rule_set": ["geosite-cn", "geosite-private"], "server": "local"}],
+            "rules": [
+                # 已知境外域名：境外 DNS（经节点），避免被国内 DNS 污染，也不泄露给国内 DNS
+                {"rule_set": ["geosite-geolocation-!cn"], "server": "remote"},
+                # 已知国内域名：国内 DNS，拿到就近的国内 CDN 地址
+                {"rule_set": ["geosite-cn", "geosite-private"], "server": "local"},
+                # 列表外的域名：先问国内 DNS，结果是国内 IP 才采用（IP 规则集在 DNS 规则里是「地址过滤」），
+                # 否则跳过本条交给 final 的境外 DNS。这样列表外的国内网站也能拿到国内 IP，按 geoip:cn 直连
+                {"rule_set": ["geoip-cn"], "server": "local"},
+            ],
             "final": "remote",
             "strategy": "prefer_ipv4",
         },
@@ -1003,6 +1011,9 @@ def build_clash(conf, user):
         "ipv6: false",
         "unified-delay: true",
         "geodata-mode: true",
+        # 默认只在首次运行时下载 geosite / geoip，打开后每 24 小时自动更新
+        "geo-auto-update: true",
+        "geo-update-interval: 24",
         "dns:",
         "  enable: true",
         "  enhanced-mode: fake-ip",
@@ -1107,8 +1118,10 @@ def subscription_overview(conf):
         "groups": groups,
         "rules": [{"match": m, "target": t} for m, t in rules],
         "dns": [
-            "sing-box：国内域名用 223.5.5.5（DoH）直接解析，其余用 1.1.1.1（DoH）经「节点选择」解析",
-            "Clash：fake-ip 模式；默认用阿里 / 腾讯 DoH，境外域名用 1.1.1.1（DoH）经「节点选择」解析",
+            "sing-box：境外域名用 1.1.1.1（DoH）经「节点选择」解析；国内域名用 223.5.5.5（DoH）；"
+            "列表外的域名先问国内 DNS，结果是国内 IP 才采用，否则改用境外 DNS",
+            "Clash：fake-ip 模式；默认用阿里 / 腾讯 DoH，境外域名用 1.1.1.1（DoH）经「节点选择」解析；"
+            "规则数据每 24 小时自动更新",
         ],
         "rule_source": "MetaCubeX/meta-rules-dat（sing-box 用 .srs 规则集，Clash Meta 用同源 geosite / geoip）",
         "test_url": TEST_URL,
