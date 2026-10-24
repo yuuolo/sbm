@@ -139,6 +139,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 </ol>
 <div class="tip"><b>新增用户立即生效，节点不重启。</b>新用户使用的是账号池里的备用账号，这些账号早已在节点上，所以不影响任何正在使用的人。</div>
 <p>以后要再次查看某个用户的链接，在用户列表里点 <b>订阅</b> 即可。备注可以随时点击修改，不会影响节点。</p>
+<p>点用户的 <b>配置</b> 可以查看订阅的配置细节：「概览」列出节点、各代理组（默认选项高亮）、分流规则的匹配顺序和 DNS；另外三页是 sing-box / Hiddify、Clash Meta、通用链接<b>实际下发给客户端的原文</b>，密码默认打码，勾选「显示密码」才显示，可以复制或下载。帮用户排查「某个网站走了哪里」「导入报错」时很有用。</p>
 
 <h3 id="lifecycle">停用、删除、重置</h3>
 <div class="table-wrap"><table>
@@ -179,6 +180,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 </table></div>
 <p><b>地区组如何生成：</b>按节点名称识别地区（不区分大小写）：<code>HK</code>/香港、<code>TW</code>/台湾、<code>JP</code>/<code>Tokyo</code>/日本、<code>SG</code>/新加坡、<code>KR</code>/韩国、<code>US</code>/美国 等；名称里的地区缩写要独立出现，例如 <code>JP-Tokyo-01</code>、<code>US-LA-01</code>。只有有节点的地区才会出现。给节点起名时按这个习惯即可，识别不到的节点只出现在「节点选择」里。</p>
 <p><b>规则数据：</b>统一使用 MetaCubeX/meta-rules-dat（sing-box 用其 <code>.srs</code> 规则集、Clash Meta 用同源的 geosite/geoip），由客户端通过节点自动下载和更新。Shadowrocket 拿到的是节点列表，使用 App 自带的分流规则。</p>
+<p><b>查看实际内容：</b>控制台里点任一用户的 <b>配置</b>，或命令行 <code>sudo sbm user config 用户名</code>。</p>
 <p><b>修改分组：</b>分组定义在 <code>/usr/local/bin/sbm</code> 的 <code>REGIONS</code> 和 <code>SERVICES</code> 里，改完运行 <code>sudo sbm build</code> 重新生成订阅即可，不会重启节点；用户的客户端下次更新订阅时生效。</p>
 </section>
 
@@ -271,6 +273,8 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 sudo sbm user list                         <span class="c"># 列出用户、状态、账号池</span>
 sudo sbm user add alice --note "张三的手机"   <span class="c"># 新增（不重启）</span>
 sudo sbm user show alice                   <span class="c"># 查看链接</span>
+sudo sbm user config alice                 <span class="c"># 查看订阅配置概览（节点、代理组、分流规则）</span>
+sudo sbm user config alice --format clash  <span class="c"># 实际下发的原文：singbox | clash | uri</span>
 sudo sbm user disable alice [--now]        <span class="c"># 停用；--now 立即踢下线</span>
 sudo sbm user enable alice
 sudo sbm user del alice [--now]            <span class="c"># 删除；--now 立即踢下线</span>

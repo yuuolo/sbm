@@ -4,6 +4,7 @@
 只监听 127.0.0.1，由 Nginx 在 /admin/ 下做 HTTPS 和登录认证后反向代理过来。
 业务逻辑全部复用 /usr/local/bin/sbm，和命令行共用同一把锁、同一份数据。
 """
+import base64
 import contextlib
 import html
 import importlib.machinery
@@ -292,6 +293,23 @@ def user_traffic(name):
     return dict(sbm.traffic_detail(u["id"]), name=u["name"])
 
 
+def user_config(name):
+    """订阅配置详情：结构化概览 + 实际下发给客户端的三种格式原文（含密码，仅管理员可见）。"""
+    conf = sbm.load(sbm.CONF)
+    try:
+        u = sbm.get_user(sbm.load_users(), name)
+    except sbm.SbmError as e:
+        raise ApiError(404, str(e))
+    files = sbm.read_sub_files(u)
+    if files is not None:
+        try:
+            files["uri_decoded"] = base64.b64decode(files["uri"]).decode()
+        except ValueError:
+            files["uri_decoded"] = ""
+    return {"name": u["name"], "enabled": u["enabled"], "overview": sbm.subscription_overview(conf),
+            "files": files, "links": sbm.sub_links(conf, u)}
+
+
 def domain_check(zone):
     try:
         return {"ok": True, "log": "\n".join(sbm.domain_check(sbm.load(sbm.CONF), zone))}
@@ -430,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(node_status)
         elif t := re.fullmatch(r"/api/users/([^/]+)/traffic", url.path):
             self.handle_api(lambda: user_traffic(unquote(t.group(1))))
+        elif c := re.fullmatch(r"/api/users/([^/]+)/config", url.path):
+            self.handle_api(lambda: user_config(unquote(c.group(1))))
         elif m := re.fullmatch(r"/api/domains/([a-z0-9.-]+)/check", url.path):
             self.handle_api(lambda: domain_check(m.group(1)))
         elif url.path == "/api/versions":

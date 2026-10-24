@@ -1068,6 +1068,68 @@ def build_uri(conf, user):
     return base64.b64encode("\n".join(links).encode()).decode() + "\n"
 
 
+# ---------- 订阅配置详情（控制台「配置」与 sbm user config 使用） ----------
+
+SUB_FILES = {"singbox": "singbox.json", "clash": "clash.yaml", "uri": "uri.txt"}
+
+
+def subscription_overview(conf):
+    """订阅的结构化概览：节点、代理组、分流规则（按匹配顺序）、DNS。
+    与 build_singbox / build_clash 用同一份 group_plan，所以和实际下发的内容一致。"""
+    regions, services = group_plan(conf)
+    names = [n["name"] for n in conf["nodes"]]
+    region_titles = [r[0] for r in regions]
+    disp = lambda x: "直连" if x == "DIRECT" else x  # noqa: E731
+    groups = [
+        {"name": G_PROXY, "type": "手动选择", "default": G_AUTO,
+         "members": [G_AUTO, f"{G_FALLBACK}（仅 Clash）", *region_titles, *names, "直连"]},
+        {"name": G_AUTO, "type": "自动测速", "default": "延迟最低", "members": names},
+        {"name": G_FALLBACK, "type": "故障转移（仅 Clash）", "default": "第一个可用", "members": names},
+        *[{"name": t, "type": "自动测速", "default": "延迟最低", "members": m} for t, m in regions],
+        *[{"name": t, "type": "手动选择", "default": disp(o[0]), "members": [disp(x) for x in o]}
+          for t, o, _gs, _gi in services],
+        {"name": G_ADS, "type": "手动选择（sing-box 固定拦截）", "default": "拦截", "members": ["拦截", "直连"]},
+        {"name": G_DIRECT, "type": "手动选择", "default": "直连", "members": ["直连", G_PROXY]},
+        {"name": G_FINAL, "type": "手动选择", "default": G_PROXY,
+         "members": [G_PROXY, "直连", G_AUTO, *region_titles, *names]},
+    ]
+    rules = [("局域网与私有地址（geosite:private、私有 IP）", "直连"),
+             ("广告（geosite:category-ads-all）", G_ADS)]
+    for title, _options, geosite, geoip in services:
+        rules.append(("、".join([f"geosite:{g}" for g in geosite] + [f"geoip:{g}" for g in geoip]), title))
+    rules += [("境外网站（geosite:geolocation-!cn）", G_PROXY),
+              ("国内网站与 IP（geosite:cn、geoip:cn）", G_DIRECT),
+              ("以上都没有匹配到", G_FINAL)]
+    return {
+        "nodes": [{"name": n["name"], "protocol": "AnyTLS", "server": n["server"], "port": n["port"],
+                   "sni": n["sni"], "region": next((t for t, m in regions if n["name"] in m), "")}
+                  for n in conf["nodes"]],
+        "groups": groups,
+        "rules": [{"match": m, "target": t} for m, t in rules],
+        "dns": [
+            "sing-box：国内域名用 223.5.5.5（DoH）直接解析，其余用 1.1.1.1（DoH）经「节点选择」解析",
+            "Clash：fake-ip 模式；默认用阿里 / 腾讯 DoH，境外域名用 1.1.1.1（DoH）经「节点选择」解析",
+        ],
+        "rule_source": "MetaCubeX/meta-rules-dat（sing-box 用 .srs 规则集，Clash Meta 用同源 geosite / geoip）",
+        "test_url": TEST_URL,
+    }
+
+
+def read_sub_files(user):
+    """读取实际下发给客户端的订阅文件；停用的用户没有订阅文件，返回 None。"""
+    d = os.path.join(WWW, user["token"])
+    if not user["enabled"] or not os.path.isdir(d):
+        return None
+    files = {}
+    for fmt, fname in SUB_FILES.items():
+        try:
+            with open(os.path.join(d, fname), encoding="utf-8") as f:
+                files[fmt] = f.read()
+        except FileNotFoundError:
+            files[fmt] = ""
+    return files
+
+
 GUIDE_TPL = "/usr/local/share/sbm/guide.tpl.html"
 
 
@@ -1516,6 +1578,36 @@ def cmd_user(args, conf):
         for label, link in sub_links(conf, u).items():
             print(f"  {label}:\n    {link}")
         return
+    if args.action == "config":
+        try:
+            u = get_user(users, args.name)
+        except SbmError as e:
+            die(str(e))
+        if args.format != "overview":
+            files = read_sub_files(u)
+            if files is None:
+                die(f"用户 {u['name']} 已停用，没有订阅文件")
+            text = files[args.format]
+            if args.format == "uri":  # 通用链接是 base64，解码后更好读
+                text = base64.b64decode(text).decode() + "\n"
+            sys.stdout.write(text)
+            return
+        ov = subscription_overview(conf)
+        print(f"用户 {u['name']} 的订阅配置（{'启用' if u['enabled'] else '停用，当前没有下发'}）\n")
+        print("节点:")
+        for n in ov["nodes"]:
+            print(f"  {n['name']:<18}{n['protocol']}  {n['server']}:{n['port']}  {n['region']}")
+        print("\n代理组（默认 → 可选）:")
+        for g in ov["groups"]:
+            print(f"  {g['name']}  [{g['type']}]  默认 {g['default']}")
+            print(f"      {' / '.join(g['members'])}")
+        print("\n分流规则（从上到下依次匹配）:")
+        for i, r in enumerate(ov["rules"], 1):
+            print(f"  {i:>2}. {r['match']}  →  {r['target']}")
+        print("\nDNS:\n  " + "\n  ".join(ov["dns"]))
+        print(f"\n规则数据: {ov['rule_source']}")
+        print("\n查看原始内容: sbm user config <名字> --format singbox|clash|uri")
+        return
     try:
         if args.action == "add":
             need_push, notice = user_add(users, creds, args.name, args.note or "", args.password)
@@ -1677,9 +1769,12 @@ def main():
     pu = sub.add_parser("user", help="用户管理", description=(
         "add / enable：使用账号池，立即生效，节点不重启\n"
         "del / disable：订阅立即失效，节点账号在每天维护时清理；加 --now 立即踢下线（重启节点）\n"
-        "reset：默认立即让旧密码失效（重启节点）；加 --later 改为维护时失效"),
+        "reset：默认立即让旧密码失效（重启节点）；加 --later 改为维护时失效\n"
+        "config：查看订阅配置概览（节点、代理组、分流规则）；--format singbox|clash|uri 查看实际下发的原文"),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    pu.add_argument("action", choices=["list", "add", "del", "enable", "disable", "reset", "show"])
+    pu.add_argument("action", choices=["list", "add", "del", "enable", "disable", "reset", "show", "config"])
+    pu.add_argument("--format", choices=["overview", "singbox", "clash", "uri"], default="overview",
+                    help="config: 查看概览，或实际下发的 sing-box / Clash / 通用链接内容")
     pu.add_argument("name", nargs="?")
     pu.add_argument("--password", help="add: 指定密码（不走账号池，需要重启节点）")
     pu.add_argument("--note", help="add: 备注")

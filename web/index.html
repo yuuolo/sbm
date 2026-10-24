@@ -289,6 +289,34 @@ tbody tr:hover td { background: var(--surface-2); }
 .data-table td, .data-table th { padding: 5px 10px; font-variant-numeric: tabular-nums; }
 .sec-title { font-size: 13.5px; font-weight: 600; margin: 18px 0 6px; }
 
+/* 订阅配置详情 */
+.modal.xwide { max-width: 980px; }
+.cfg-meta { font-size: 12.5px; color: var(--muted); margin: -4px 0 12px; }
+.cfg-table td, .cfg-table th { padding: 8px 10px; font-size: 13px; }
+.cfg-table td code { font-size: 12px; }
+.grp { border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; margin-bottom: 8px; }
+.grp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.grp-head b { font-size: 13.5px; }
+.grp-type { font-size: 11.5px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.chips span { font-size: 12px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+.chips span.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); font-weight: 600; }
+.rules { list-style: none; padding: 0; margin: 0; counter-reset: r; }
+.rules li { display: flex; align-items: center; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--border); font-size: 13px; counter-increment: r; }
+.rules li::before { content: counter(r); width: 20px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
+.rules li .m { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rules li .t { font-weight: 600; white-space: nowrap; }
+.code-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.code-bar .spacer { flex: 1; }
+.code-bar label { font-size: 13px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.code-view { background: #0f1017; color: #d6d8e6; border-radius: 10px; padding: 12px 14px; max-height: 460px; overflow: auto;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; tab-size: 2; margin: 0; }
+.code-view .k { color: #8fb4ff; }
+.code-view .s { color: #a5e3b4; }
+.code-view .n { color: #f5c26b; }
+.code-view .mask { color: #ff8a95; }
+@media (max-width: 760px) { .rules li .t { white-space: normal; } }
+
 /* 域名管理 */
 .dom-table td { padding: 10px 12px; }
 .dom-table td:first-child { font-weight: 600; }
@@ -481,6 +509,33 @@ tbody tr:hover td { background: var(--surface-2); }
       <button type="submit" class="btn primary" id="nodeSubmit">开始部署</button>
     </div>
   </form>
+</div>
+
+<!-- 订阅配置详情 -->
+<div class="modal-bg" id="cfgModal">
+  <div class="modal xwide">
+    <div class="modal-head"><h3 id="cfgTitle">订阅配置</h3><button class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <div class="seg" id="cfgTabs">
+        <button type="button" data-tab="overview" class="on">概览</button>
+        <button type="button" data-tab="singbox">sing-box / Hiddify</button>
+        <button type="button" data-tab="clash">Clash Meta</button>
+        <button type="button" data-tab="uri">通用链接</button>
+      </div>
+      <div id="cfgOverview"></div>
+      <div id="cfgRaw" hidden>
+        <div class="code-bar">
+          <span class="muted" id="cfgInfo" style="font-size:12.5px"></span>
+          <span class="spacer"></span>
+          <label><input type="checkbox" id="cfgReveal">显示密码</label>
+          <button class="btn sm" id="cfgCopy">复制</button>
+          <button class="btn sm" id="cfgDownload">下载</button>
+        </div>
+        <pre class="code-view" id="cfgCode"></pre>
+        <p class="hint" id="cfgHint"></p>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- 用户流量 -->
@@ -752,6 +807,7 @@ function render() {
       <td class="col-created muted">${esc(u.created)}</td>
       <td><div class="actions">
         <button class="btn sm" data-act="sub" ${u.enabled ? "" : "disabled title=\"停用的用户没有订阅\""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg><span class="txt">订阅</span></button>
+        <button class="btn sm ghost" data-act="config" title="查看订阅的配置细节"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6"/></svg><span class="txt">配置</span></button>
         <button class="btn sm ghost" data-act="reset" title="重置密码和订阅链接"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span class="txt">重置</span></button>
         <button class="btn sm ghost danger" data-act="del" title="删除用户"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span class="txt">删除</span></button>
       </div></td>
@@ -923,6 +979,8 @@ $("#users").addEventListener("click", async (e) => {
       // 旧账号还在节点上时直接恢复；已清理则从账号池分配新账号；池空了才需要重启
       mutate("POST", `${path}/enable`, {}, `${name} 已启用成功`, !u.pending_purge && poolEmpty());
     }
+  } else if (act === "config") {
+    showConfig(name);
   } else if (act === "traffic") {
     showTraffic(name);
   } else if (act === "sub") {
@@ -1036,6 +1094,109 @@ async function runJob(id) {
 }
 // 任务进行中不允许点背景关闭日志窗口
 $("#jobModal").addEventListener("click", (e) => { if ($("#jobClose").disabled) e.stopImmediatePropagation(); }, true);
+
+// ---------- 订阅配置详情 ----------
+let cfgData = null, cfgTab = "overview";
+const CFG_FILES = {
+  singbox: { file: "singbox", ext: "json", lang: "json", hint: "这是 sing-box、Hiddify 实际拿到的配置（JSON）。客户端会把其中的 TUN 入站、规则集等按本机情况加载。" },
+  clash: { file: "clash", ext: "yaml", lang: "yaml", hint: "这是 Clash Meta / Mihomo、Clash Verge Rev、FlClash 实际拿到的配置（YAML）。" },
+  uri: { file: "uri_decoded", ext: "txt", lang: "uri", hint: "Shadowrocket 等拿到的是这些链接的 base64 编码，这里解码后显示；每行一个节点。" },
+};
+
+// 只转义 & < >，保留引号以便高亮；内容放在 <pre> 文本里是安全的
+const escCode = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function maskSecrets(text, lang) {
+  if (lang === "uri") return text.replace(/(anytls:\/\/)([^@\n]*)(@)/g, "$1\u0000$3");
+  return text.replace(/("password"\s*:\s*"|password:\s*")((?:[^"\\]|\\.)*)(")/g, "$1\u0000$3");
+}
+
+function highlight(text, lang) {
+  let h = escCode(text);
+  if (lang === "json") {
+    h = h.replace(/("(?:[^"\\\n]|\\.)*")(\s*:)?|\b(true|false|null)\b|(-?\b\d+(?:\.\d+)?\b)/g,
+      (m, str, colon, kw, num) => str ? `<span class="${colon ? "k" : "s"}">${str}</span>${colon || ""}` : `<span class="n">${kw || num}</span>`);
+  } else if (lang === "yaml") {
+    // 第二步匹配的是双引号字符串，所以第一步插入的标签属性用单引号，避免被当成字符串
+    h = h.split("\n").map((line) => line
+      .replace(/^(\s*(?:- )?)([\w.-]+)(:)/, "$1<span class='k'>$2</span>$3")
+      .replace(/("(?:[^"\\]|\\.)*")/g, "<span class='s'>$1</span>")).join("\n");
+  }
+  return h.replace(/\u0000/g, '<span class="mask">••••••••</span>');
+}
+
+function renderOverview(d) {
+  const ov = d.overview;
+  const nodes = ov.nodes.length
+    ? `<table class="cfg-table"><thead><tr><th>节点</th><th>协议</th><th>地址</th><th>SNI</th><th>地区组</th></tr></thead><tbody>`
+      + ov.nodes.map((n) => `<tr><td><b>${esc(n.name)}</b></td><td>${esc(n.protocol)}</td><td><code>${esc(n.server)}:${n.port}</code></td>`
+        + `<td><code>${esc(n.sni)}</code></td><td>${esc(n.region || "—")}</td></tr>`).join("") + `</tbody></table>`
+    : `<p class="muted">还没有节点</p>`;
+  const groups = ov.groups.map((g) => `<div class="grp"><div class="grp-head"><b>${esc(g.name)}</b><span class="grp-type">${esc(g.type)}</span>`
+    + `<span class="spacer" style="flex:1"></span><span class="grp-type">默认：${esc(g.default)}</span></div>`
+    + `<div class="chips">${g.members.map((m) => `<span class="${m === g.default ? "on" : ""}">${esc(m)}</span>`).join("")}</div></div>`).join("");
+  const rules = `<ol class="rules">${ov.rules.map((r) => `<li><span class="m">${esc(r.match)}</span><span class="muted">→</span><span class="t">${esc(r.target)}</span></li>`).join("")}</ol>`;
+  $("#cfgOverview").innerHTML =
+    (d.enabled ? "" : `<div class="callout" style="margin-bottom:12px">该用户已停用，当前没有下发订阅；下面是启用后会下发的结构。</div>`)
+    + `<div class="sec-title" style="margin-top:0">节点（${ov.nodes.length}）</div>${nodes}`
+    + `<div class="sec-title">代理组（${ov.groups.length}）</div><div class="cfg-meta">高亮的是默认选项，用户可以在客户端里切换。</div>${groups}`
+    + `<div class="sec-title">分流规则（从上到下依次匹配）</div>${rules}`
+    + `<div class="sec-title">DNS</div><ul style="margin:0;padding-left:20px;font-size:13px">${ov.dns.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
+    + `<p class="hint">规则数据：${esc(ov.rule_source)}；测速地址 <code>${esc(ov.test_url)}</code>。分组与规则对所有用户相同，只有节点密码不同。</p>`;
+}
+
+function renderRaw() {
+  const meta = CFG_FILES[cfgTab];
+  const text = cfgData.files ? cfgData.files[meta.file] || "" : "";
+  const shown = $("#cfgReveal").checked ? text : maskSecrets(text, meta.lang);
+  $("#cfgCode").innerHTML = highlight(shown, meta.lang);
+  $("#cfgInfo").textContent = `${text.split("\n").filter((l) => l).length} 行 · ${fmtBytes(new Blob([text]).size)}`;
+  $("#cfgHint").textContent = meta.hint;
+}
+
+function setCfgTab(tab) {
+  cfgTab = tab;
+  document.querySelectorAll("#cfgTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+  $("#cfgOverview").hidden = tab !== "overview";
+  $("#cfgRaw").hidden = tab === "overview";
+  if (tab !== "overview") {
+    if (!cfgData.files) {
+      $("#cfgRaw").hidden = true;
+      $("#cfgOverview").hidden = false;
+      toast("warn", "该用户已停用", "停用的用户没有订阅文件，只能查看概览");
+      setCfgTab("overview");
+      return;
+    }
+    renderRaw();
+  }
+}
+
+async function showConfig(name) {
+  try { cfgData = await api("GET", `api/users/${encodeURIComponent(name)}/config`); }
+  catch (e) { toast("err", "获取配置失败", e.message); return; }
+  $("#cfgTitle").textContent = `订阅配置 · ${cfgData.name}`;
+  $("#cfgReveal").checked = false;
+  renderOverview(cfgData);
+  setCfgTab("overview");
+  openModal("#cfgModal");
+}
+
+$("#cfgTabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) setCfgTab(b.dataset.tab); };
+$("#cfgReveal").onchange = renderRaw;
+$("#cfgCopy").onclick = async (e) => {
+  await copy(cfgData.files[CFG_FILES[cfgTab].file]);
+  e.target.textContent = "已复制";
+  setTimeout(() => (e.target.textContent = "复制"), 1500);
+};
+$("#cfgDownload").onclick = () => {
+  const meta = CFG_FILES[cfgTab];
+  const blob = new Blob([cfgData.files[meta.file]], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${cfgData.name}-${cfgTab}.${meta.ext}`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 
 // ---------- 用户流量 ----------
 // 字节数坐标轴：选单位，再取 1/2/5×10ⁿ 的整齐刻度
