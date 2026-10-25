@@ -50,6 +50,8 @@ def state():
     creds = sbm.load_creds()
     traffic = sbm.traffic_summary(conf)
     return {
+        "probe": sbm.probe_summary(conf),
+        "notify_count": sum(1 for c in sbm.load_notify()["channels"] if c.get("enabled", True)),
         "traffic": {
             "enabled": traffic["enabled"],
             "collected": traffic["collected"],
@@ -293,6 +295,48 @@ def user_traffic(name):
     return dict(sbm.traffic_detail(u["id"]), name=u["name"])
 
 
+# ---------- 国内可达性与告警通知 ----------
+
+def probe_now():
+    lines = []
+    sbm.probe_run(sbm.load(sbm.CONF), log=lines.append)
+    return {"ok": True, "log": "\n".join(lines), "probe": sbm.probe_summary(sbm.load(sbm.CONF))}
+
+
+def notify_list():
+    return {"channels": [sbm.mask_channel(c) for c in sbm.load_notify()["channels"]], "types": sbm.NOTIFY_TYPES}
+
+
+def notify_change(fn):
+    """在锁内修改通知渠道；fn(data) 修改后保存。Webhook / Token 不会出现在返回值里。"""
+    with mutating():
+        data = sbm.load_notify()
+        try:
+            fn(data)
+        except sbm.SbmError as e:
+            raise ApiError(400, str(e))
+        sbm.save_notify(data)
+    return notify_list()
+
+
+def notify_find(data, cid):
+    for ch in data["channels"]:
+        if ch["id"] == cid:
+            return ch
+    raise ApiError(404, "通知渠道不存在")
+
+
+def notify_test(cid):
+    data = sbm.load_notify()
+    ch = notify_find(data, cid)
+    try:
+        sbm.send_channel(sbm.load(sbm.CONF), ch, "🔔 sbm 测试通知",
+                         f"「{ch['name']}」配置正确，可以收到告警。发送时间 {datetime.now():%Y-%m-%d %H:%M}。")
+    except sbm.SbmError as e:
+        raise ApiError(400, str(e))
+    return {"ok": True}
+
+
 def user_config(name):
     """订阅配置详情：结构化概览 + 实际下发给客户端的三种格式原文（含密码，仅管理员可见）。"""
     conf = sbm.load(sbm.CONF)
@@ -448,6 +492,10 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(node_status)
         elif t := re.fullmatch(r"/api/users/([^/]+)/traffic", url.path):
             self.handle_api(lambda: user_traffic(unquote(t.group(1))))
+        elif url.path == "/api/notify":
+            self.handle_api(notify_list)
+        elif p := re.fullmatch(r"/api/probe/([^/]+)", url.path):
+            self.handle_api(lambda: {"history": sbm.probe_history(unquote(p.group(1)))})
         elif c := re.fullmatch(r"/api/users/([^/]+)/config", url.path):
             self.handle_api(lambda: user_config(unquote(c.group(1))))
         elif m := re.fullmatch(r"/api/domains/([a-z0-9.-]+)/check", url.path):
@@ -482,6 +530,36 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(lambda: attach_job(self.read_body()))
         elif path == "/api/nodes/upgrade":
             self.handle_api(lambda: upgrade_job(self.read_body()))
+        elif path == "/api/probe/run":
+            self.handle_api(lambda: (self.read_body(), probe_now())[1])
+        elif path == "/api/notify":
+            def add():
+                b = self.read_body()
+                return notify_change(lambda data: sbm.notify_add(
+                    data, str_field(b, "type"), str_field(b, "name"), str_field(b, "url"), str_field(b, "secret"),
+                    str_field(b, "token"), str_field(b, "chat_id")))
+            self.handle_api(add)
+        elif path == "/api/notify/telegram-chat":
+            def detect():
+                b = self.read_body()
+                try:
+                    return sbm.telegram_chat_id(sbm.load(sbm.CONF), str_field(b, "token"))
+                except sbm.SbmError as e:
+                    raise ApiError(400, str(e))
+            self.handle_api(detect)
+        elif nt := re.fullmatch(r"/api/notify/([0-9a-f]{8})/(test|toggle)", path):
+            cid, action = nt.group(1), nt.group(2)
+
+            def run_notify():
+                self.read_body()
+                if action == "test":
+                    return notify_test(cid)
+
+                def toggle(data):
+                    ch = notify_find(data, cid)
+                    ch["enabled"] = not ch.get("enabled", True)
+                return notify_change(toggle)
+            self.handle_api(run_notify)
         elif path == "/api/domains":
             self.mutation(lambda body: domain_op(lambda conf: sbm.domain_add(
                 conf, str_field(body, "zone"), str_field(body, "token"), str_field(body, "note"))))
@@ -501,7 +579,17 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/users/([^/]+)", path)
         n = re.fullmatch(r"/api/nodes/([^/]+)", path)
         d = re.fullmatch(r"/api/domains/([a-z0-9.-]+)", path)
-        if d:
+        nd = re.fullmatch(r"/api/notify/([0-9a-f]{8})", path)
+        if nd:
+            def drop():
+                self.read_body()
+
+                def remove(data):
+                    notify_find(data, nd.group(1))
+                    data["channels"] = [c for c in data["channels"] if c["id"] != nd.group(1)]
+                return notify_change(remove)
+            self.handle_api(drop)
+        elif d:
             self.mutation(lambda body: domain_op(lambda conf: sbm.domain_del(conf, d.group(1))))
         elif m:
             self.mutation(lambda body: user_action(unquote(m.group(1)), "delete", body))

@@ -124,7 +124,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx || systemctl restart nginx
 systemctl daemon-reload
-systemctl enable --now sbm-web.service sbm-maintain.timer sbm-traffic.timer >/dev/null 2>&1
+systemctl enable --now sbm-web.service sbm-maintain.timer sbm-traffic.timer sbm-probe.timer >/dev/null 2>&1
 systemctl restart sbm-web.service
 systemctl is-active --quiet sbm-web || { journalctl -u sbm-web -n 20 --no-pager; exit 1; }
 if [ "$UPGRADE" = 0 ]; then

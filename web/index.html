@@ -289,6 +289,22 @@ tbody tr:hover td { background: var(--surface-2); }
 .data-table td, .data-table th { padding: 5px 10px; font-variant-numeric: tabular-nums; }
 .sec-title { font-size: 13.5px; font-weight: 600; margin: 18px 0 6px; }
 
+/* 国内可达性 */
+.reach { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.reach:hover .pill { filter: brightness(1.08); }
+.reach .muted { font-size: 12px; }
+.strip { display: flex; gap: 1px; height: 26px; margin: 6px 0 4px; }
+.strip i { flex: 1; min-width: 2px; border-radius: 2px; background: var(--ok); }
+.strip i.bad { background: var(--danger); }
+.strip i.warn { background: var(--warn); }
+.strip-axis { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); }
+.strip-legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.strip-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.checks td { padding: 7px 10px; font-size: 13px; }
+.checks td:first-child { color: var(--muted); width: 110px; }
+.nbadge { font-size: 11px; font-weight: 700; min-width: 18px; padding: 0 5px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.nbadge.none { background: var(--warn-soft); color: var(--warn); }
+
 /* 订阅配置详情 */
 .modal.xwide { max-width: 980px; }
 .cfg-meta { font-size: 12.5px; color: var(--muted); margin: -4px 0 12px; }
@@ -362,6 +378,7 @@ tbody tr:hover td { background: var(--surface-2); }
     <div class="spacer"></div>
     <div class="top-actions">
       <a class="btn ghost" href="manual" target="_blank" rel="noopener" title="管理手册" style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>使用手册</a>
+      <button class="btn ghost" id="notifyBtn" title="告警通知设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>通知<span class="nbadge" id="notifyBadge"></span></button>
       <button class="btn ghost" id="themeBtn" title="切换深浅色"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <button class="btn" id="syncBtn" title="把所有用户重新推送到节点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2"/><path d="M21 4v5h-5M3 20v-5h5"/></svg>同步节点</button>
       <button class="btn primary" id="addBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新增用户</button>
@@ -379,6 +396,7 @@ tbody tr:hover td { background: var(--surface-2); }
     <div class="section-head">
       <h2>节点</h2>
       <div class="spacer"></div>
+      <button class="btn sm" id="probeBtn" title="从订阅服务器（国内）立即检测各节点的可达性"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>立即检测</button>
       <button class="btn sm" id="verBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>版本管理</button>
       <button class="btn sm" id="domBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>域名管理</button>
       <button class="btn sm" id="addNodeBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加节点</button>
@@ -509,6 +527,60 @@ tbody tr:hover td { background: var(--surface-2); }
       <button type="submit" class="btn primary" id="nodeSubmit">开始部署</button>
     </div>
   </form>
+</div>
+
+<!-- 国内可达性历史 -->
+<div class="modal-bg" id="probeModal">
+  <div class="modal wide">
+    <div class="modal-head"><h3 id="prTitle">国内可达性</h3><button class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <div class="tiles" id="prTiles"></div>
+      <div class="sec-title" style="margin-top:0">最近一次检测</div>
+      <table class="checks"><tbody id="prChecks"></tbody></table>
+      <div id="prDetail"></div>
+      <div class="sec-title">最近 24 小时（每 5 分钟一次）</div>
+      <div class="strip" id="prStrip"></div>
+      <div class="strip-axis"><span id="prFrom"></span><span>现在</span></div>
+      <div class="strip-legend"><span><i style="background:var(--ok)"></i>正常</span><span><i style="background:var(--warn)"></i>DNS 异常</span><span><i style="background:var(--danger)"></i>不可达 / 代理不通</span></div>
+      <div class="sec-title">最近的异常</div>
+      <div id="prEvents"></div>
+      <p class="hint">检测在订阅服务器（国内）上进行：用国内 DNS 解析节点域名、直连节点做 TCP 与 TLS 握手，并经节点真实代理一次请求；国内失败时再让其他节点从境外连接对照，区分「被封」和「节点故障」。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 告警通知 -->
+<div class="modal-bg" id="notifyModal">
+  <div class="modal wide">
+    <div class="modal-head"><h3>告警通知</h3><button class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <p class="muted" style="margin:0 0 12px;font-size:13px">节点从国内连续 2 次检测异常时发送告警（疑似被封、节点故障、DNS 污染、代理不通），异常持续时每 6 小时提醒一次，恢复时再通知。消息会发到下面所有启用的渠道。Webhook 和 Token 只保存在订阅服务器上，保存后不再显示。</p>
+      <table class="dom-table">
+        <thead><tr><th>渠道</th><th>地址</th><th>启用</th><th style="text-align:right">操作</th></tr></thead>
+        <tbody id="ntList"></tbody>
+      </table>
+      <form class="add-box" id="ntForm" autocomplete="off">
+        <b>添加通知渠道</b>
+        <div class="grid2">
+          <div class="field"><label for="ntType">类型</label>
+            <select id="ntType" style="width:100%;border:1px solid var(--border);background:var(--surface-2);border-radius:9px;padding:8px 10px;font:inherit;color:inherit">
+              <option value="wecom">企业微信群机器人</option><option value="telegram">Telegram Bot</option>
+              <option value="bark">Bark（iPhone）</option><option value="feishu">飞书群机器人</option><option value="dingtalk">钉钉群机器人</option>
+            </select></div>
+          <div class="field"><label for="ntName">名称（可选）</label><input id="ntName" maxlength="32" placeholder="例如 运维群"></div>
+        </div>
+        <div class="howto" id="ntHelp"></div>
+        <div class="field nt-url"><label for="ntUrl">Webhook / 推送地址</label><input id="ntUrl" type="password" maxlength="500" autocomplete="new-password" spellcheck="false"></div>
+        <div class="field nt-secret"><label for="ntSecret">签名密钥（可选）</label><input id="ntSecret" type="password" maxlength="200" autocomplete="new-password" spellcheck="false"></div>
+        <div class="grid2 nt-tg">
+          <div class="field"><label for="ntToken">Bot Token</label><input id="ntToken" type="password" maxlength="100" autocomplete="new-password" spellcheck="false"></div>
+          <div class="field"><label for="ntChat">Chat ID</label>
+            <div class="suffix"><input id="ntChat" maxlength="40" spellcheck="false" placeholder="先给机器人发一句话"><button type="button" class="btn sm" id="ntDetect" style="border-radius:0 9px 9px 0">获取</button></div></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button type="submit" class="btn primary">保存</button></div>
+      </form>
+    </div>
+  </div>
 </div>
 
 <!-- 订阅配置详情 -->
@@ -769,6 +841,7 @@ function colorOf(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCo
 
 function render() {
   $("#domain").textContent = state.sub_domain ? `订阅域名 ${state.sub_domain}` : "";
+  renderNotifyBadge();
   const total = state.users.length;
   const enabled = state.users.filter((u) => u.enabled).length;
   $("#sTotal").textContent = total;
@@ -819,6 +892,19 @@ function fmtBytes(n) {
   let i = 0;
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return i === 0 ? `${n} B` : `${n >= 100 ? n.toFixed(0) : n.toFixed(n >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+const REACH_SHORT = { ok: "正常", dns: "DNS 污染", blocked: "疑似被封", down: "节点故障", unreachable: "国内不通", proxy_fail: "代理不通" };
+const reachClass = (st) => (st === "ok" ? "ok" : st === "dns" ? "off" : "bad");
+
+function probeRow(name) {
+  const p = state.probe;
+  const r = p && p.enabled && p.nodes[name];
+  if (!r) return `<dt>国内可达</dt><dd class="muted">等待首次检测</dd>`;
+  const lat = r.status === "ok" && r.proxy_ms ? `<span class="muted">${r.proxy_ms} ms</span>` : "";
+  const up = r.uptime_24h != null ? `<span class="muted">24h ${r.uptime_24h}%</span>` : "";
+  return `<dt>国内可达</dt><dd><span class="reach" data-probe="${esc(name)}" title="${esc(r.label + (r.detail.length ? "\n" + r.detail.join("\n") : "") + "\n点击查看 24 小时记录")}">`
+    + `<span class="pill ${reachClass(r.status)}">${REACH_SHORT[r.status] || r.status}</span>${lat}${up}</span></dd>`;
 }
 
 function nodeTrafficRow(name) {
@@ -895,6 +981,7 @@ function renderNodes() {
       <div class="node-head"><b>${esc(n.name)}</b>${badge}<div style="flex:1"></div>${dirty}${pill}</div>
       <dl>
         ${row("地址", `${n.server}:${n.port}`)}
+        ${probeRow(n.name)}
         ${state.traffic && state.traffic.enabled ? nodeTrafficRow(n.name) : ""}
         ${row("服务器", n.host)}
         ${s && s.reachable ? metricRows(s, verRow) : ""}
@@ -1094,6 +1181,134 @@ async function runJob(id) {
 }
 // 任务进行中不允许点背景关闭日志窗口
 $("#jobModal").addEventListener("click", (e) => { if ($("#jobClose").disabled) e.stopImmediatePropagation(); }, true);
+
+// ---------- 国内可达性 ----------
+$("#probeBtn").onclick = async () => {
+  busy(true, "正在从国内检测各节点…（约 10~20 秒）", false);
+  try {
+    const res = await api("POST", "api/probe/run", {});
+    state.probe = res.probe;
+    renderNodes();
+    const bad = Object.entries(res.probe.nodes).filter(([, r]) => r.status !== "ok");
+    toast(bad.length ? "warn" : "ok", bad.length ? `${bad.length} 个节点异常` : "所有节点国内访问正常", res.log);
+  } catch (e) { toast("err", "检测失败", e.message); }
+  finally { busy(false); }
+};
+
+async function showProbe(name) {
+  const r = state.probe.nodes[name];
+  let hist = [];
+  try { hist = (await api("GET", `api/probe/${encodeURIComponent(name)}`)).history; }
+  catch (e) { toast("err", "获取检测记录失败", e.message); return; }
+  $("#prTitle").textContent = `国内可达性 · ${name}`;
+  const tile = (k, v, d) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  $("#prTiles").innerHTML = tile("当前状态", `<span class="pill ${reachClass(r.status)}" style="font-size:13px">${REACH_SHORT[r.status]}</span>`,
+      esc(new Date(r.ts * 1000).toLocaleString()))
+    + tile("24 小时可用率", r.uptime_24h != null ? `${r.uptime_24h}%` : "—", `${r.samples_24h} 次检测`)
+    + tile("平均代理延迟", r.avg_proxy_ms ? `${r.avg_proxy_ms} ms` : "—", "国内经节点请求一次的耗时");
+  const ms = (v) => (v != null ? `${v} ms` : `<span class="pill bad">失败</span>`);
+  const dnsText = { ok: "正常（解析到节点 IP）", mismatch: '<span class="pill off">解析结果不是节点 IP</span>', empty: '<span class="pill off">无结果</span>', fail: '<span class="pill bad">查询失败</span>' };
+  $("#prChecks").innerHTML = [
+    ["国内 DNS", dnsText[r.dns] || esc(r.dns)],
+    ["TCP 连接", ms(r.tcp_ms)],
+    ["TLS 握手", ms(r.tls_ms)],
+    ["经节点代理", r.proxy_ms != null ? `${r.proxy_ms} ms` : `<span class="pill bad">不通</span>`],
+    ["境外对照", r.outside ? (r.outside === "ok" ? "境外可以连接" : r.outside === "fail" ? "境外也连不上" : "无可用对照节点") : '<span class="muted">国内正常时不需要</span>'],
+  ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+  $("#prDetail").innerHTML = r.detail.length ? `<ul style="margin:8px 0 0;padding-left:20px;font-size:13px">${r.detail.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : "";
+  const fmt = (ts) => new Date(ts * 1000).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  $("#prStrip").innerHTML = hist.map((h) => `<i class="${h.status === "ok" ? "" : h.status === "dns" ? "warn" : "bad"}" title="${esc(fmt(h.ts) + "  " + h.label + (h.proxy_ms ? "  " + h.proxy_ms + " ms" : ""))}"></i>`).join("")
+    || `<span class="muted" style="font-size:13px">还没有记录</span>`;
+  $("#prFrom").textContent = hist.length ? fmt(hist[0].ts) : "";
+  const events = hist.filter((h) => h.status !== "ok").slice(-10).reverse();
+  $("#prEvents").innerHTML = events.length
+    ? `<table class="cfg-table"><tbody>${events.map((h) => `<tr><td style="white-space:nowrap">${fmt(h.ts)}</td><td><span class="pill ${reachClass(h.status)}">${REACH_SHORT[h.status]}</span></td><td class="muted" style="font-size:12.5px">${esc(h.detail.join("；"))}</td></tr>`).join("")}</tbody></table>`
+    : `<p class="muted" style="font-size:13px;margin:4px 0">最近 24 小时没有异常</p>`;
+  openModal("#probeModal");
+}
+
+// ---------- 告警通知 ----------
+const NT_HELP = {
+  wecom: "企业微信建一个群 → 群设置 → <b>添加群机器人</b> → 新建 → 复制 Webhook 地址（https://qyapi.weixin.qq.com/…）。手机微信也能收到。",
+  telegram: "在 Telegram 找 <b>@BotFather</b> 发送 /newbot 创建机器人，得到 Bot Token；然后给你的机器人发一句话（群组里则 @ 它），再点「获取」自动填入 Chat ID。消息经境外节点转发。",
+  bark: "iPhone 安装 <b>Bark</b> App，打开后复制首页的推送地址（形如 https://api.day.app/xxxxxxxx）。",
+  feishu: "飞书群 → 设置 → 群机器人 → 添加机器人 → <b>自定义机器人</b> → 复制 Webhook 地址。若开启了「签名校验」，把密钥填在下面。",
+  dingtalk: "钉钉群 → 设置 → 机器人 → 添加 → <b>自定义</b>。安全设置选「自定义关键词」并填 <code>sbm</code>，或选「加签」并把密钥填在下面。",
+};
+function ntTypeChanged() {
+  const t = $("#ntType").value;
+  $("#ntHelp").innerHTML = NT_HELP[t];
+  document.querySelectorAll("#ntForm .nt-url").forEach((el) => (el.hidden = t === "telegram"));
+  document.querySelectorAll("#ntForm .nt-secret").forEach((el) => (el.hidden = !(t === "feishu" || t === "dingtalk")));
+  document.querySelectorAll("#ntForm .nt-tg").forEach((el) => (el.hidden = t !== "telegram"));
+}
+$("#ntType").onchange = ntTypeChanged;
+
+function renderNotify(data) {
+  $("#ntList").innerHTML = data.channels.length ? data.channels.map((c) => `<tr data-nt="${c.id}">
+      <td><b>${esc(c.name)}</b><div class="dom-used">${esc(c.type_name)}${c.signed ? " · 已设签名" : ""}</div></td>
+      <td class="dom-used"><code>${esc(c.target)}</code></td>
+      <td><label class="switch"><input type="checkbox" data-nt-act="toggle" ${c.enabled ? "checked" : ""}><span></span></label></td>
+      <td><div class="dom-actions"><button class="btn sm ghost" data-nt-act="test">测试</button><button class="btn sm ghost danger" data-nt-act="del">删除</button></div></td>
+    </tr>`).join("")
+    : `<tr><td colspan="4" class="muted" style="font-size:13px">还没有通知渠道，节点异常时不会有人收到提醒</td></tr>`;
+  state.notify_count = data.channels.filter((c) => c.enabled).length;
+  renderNotifyBadge();
+}
+function renderNotifyBadge() {
+  const n = state.notify_count || 0;
+  $("#notifyBadge").textContent = n || "!";
+  $("#notifyBadge").className = n ? "nbadge" : "nbadge none";
+  $("#notifyBtn").title = n ? `已启用 ${n} 个通知渠道` : "还没有设置告警通知";
+}
+
+$("#notifyBtn").onclick = async () => {
+  $("#ntForm").reset(); ntTypeChanged();
+  try { renderNotify(await api("GET", "api/notify")); } catch (e) { toast("err", "读取通知设置失败", e.message); return; }
+  openModal("#notifyModal");
+};
+
+$("#ntDetect").onclick = async () => {
+  const token = $("#ntToken").value.trim();
+  if (!token) { toast("warn", "请先填写 Bot Token"); return; }
+  busy(true, "正在经境外节点读取机器人收到的消息…", false);
+  try {
+    const r = await api("POST", "api/notify/telegram-chat", { token });
+    $("#ntChat").value = r.chat_id;
+    toast("ok", "已获取 Chat ID", r.title ? `来自：${r.title}` : "");
+  } catch (e) { toast("err", "获取失败", e.message); }
+  finally { busy(false); }
+};
+
+$("#ntForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const body = { type: $("#ntType").value, name: $("#ntName").value.trim(), url: $("#ntUrl").value.trim(),
+    secret: $("#ntSecret").value.trim(), token: $("#ntToken").value.trim(), chat_id: $("#ntChat").value.trim() };
+  try {
+    const data = await api("POST", "api/notify", body);
+    ["#ntUrl", "#ntSecret", "#ntToken"].forEach((s) => ($(s).value = ""));  // 不在页面上留存密钥
+    renderNotify(data);
+    toast("ok", "已保存", "点该渠道的「测试」确认能收到消息");
+  } catch (err) { toast("err", "保存失败", err.message); }
+};
+
+$("#ntList").addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-nt-act]");
+  if (!el) return;
+  const id = el.closest("tr").dataset.nt, act = el.dataset.ntAct;
+  if (act === "toggle") {
+    try { renderNotify(await api("POST", `api/notify/${id}/toggle`, {})); } catch (err) { toast("err", "操作失败", err.message); }
+  } else if (act === "test") {
+    el.disabled = true; el.textContent = "发送中…";
+    try { await api("POST", `api/notify/${id}/test`, {}); toast("ok", "测试消息已发送", "请到对应的 App 里确认收到"); }
+    catch (err) { toast("err", "发送失败", err.message); }
+    finally { el.disabled = false; el.textContent = "测试"; }
+  } else if (act === "del") {
+    if (await confirmBox("删除通知渠道", "删除后不会再往这个渠道发告警，订阅服务器上保存的地址或 Token 也会一并删除。", "删除", true)) {
+      try { renderNotify(await api("DELETE", `api/notify/${id}`, {})); toast("ok", "已删除"); } catch (err) { toast("err", "删除失败", err.message); }
+    }
+  }
+});
 
 // ---------- 订阅配置详情 ----------
 let cfgData = null, cfgTab = "overview";
@@ -1412,6 +1627,8 @@ $("#verForm").onsubmit = async (e) => {
 };
 
 $("#nodes").addEventListener("click", async (e) => {
+  const reach = e.target.closest("[data-probe]");
+  if (reach) { showProbe(reach.dataset.probe); return; }
   if (e.target.closest("[data-upgrade-node]")) {
     const name = e.target.closest("[data-node]").dataset.node;
     if (await confirmBox("升级 sing-box", `把 <b>${esc(name)}</b> 升级到 <b>${esc(releaseInfo.latest)}</b>？<br><br>节点会重启几秒，现有配置保持不变；新版本启动失败会自动回滚。`, "升级"))

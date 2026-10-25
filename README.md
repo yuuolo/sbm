@@ -14,6 +14,7 @@
   - 接入已有 sing-box 节点
   - sing-box 版本查看与批量升级（失败自动回滚）
   - 节点状态：运行状态、CPU 负载、内存、系统版本
+- **国内可达性检测与告警**：订阅服务器每 5 分钟从国内检测各节点（国内 DNS、TCP/TLS 握手、经节点真实代理一次，失败时由其他节点从境外对照），区分「疑似被封 / 节点故障 / DNS 污染 / 代理不通」；异常时通过企业微信、飞书、钉钉、Bark、Telegram 告警
 - **流量统计**：按用户、按天、按节点统计，控制台查看每日图表；客户端可显示本月已用流量
 - **域名管理**：多个主域名，每个配独立的 Cloudflare Token，部署节点时选择
 - **证书**：订阅服务器统一申请和续期，续期后自动推送到节点
@@ -42,7 +43,7 @@
 | `web/manual.html` | 管理手册（`{{...}}` 占位符由后端按配置填入） | `/opt/sbm-web/` |
 | `web/guide.tpl.html` | 用户使用说明页模板 | `/usr/local/share/sbm/` |
 | `nginx/sub.conf.tpl` | Nginx 站点模板（订阅、使用说明页、控制台） | `/etc/nginx/sites-available/sub.conf` |
-| `systemd/` | 控制台服务、每日维护（04:00）、流量采集（每 5 分钟） | `/etc/systemd/system/` |
+| `systemd/` | 控制台服务、每日维护（04:00）、流量采集与国内可达性检测（各每 5 分钟） | `/etc/systemd/system/` |
 | `contrib/certbot-restart-sing-box.sh` | 给「接入」节点用的 certbot 续期钩子 | 节点的 `/etc/letsencrypt/renewal-hooks/deploy/` |
 | `install.sh` | 订阅服务器安装 / 更新脚本 | — |
 
@@ -94,6 +95,8 @@ sudo sbm user list | add <名字> | show <名字> | config <名字> [--format si
 sudo sbm node list | pubkey | deploy <名称> --host <IP> --sub <前缀> [--zone 域名] | attach | del | versions | upgrade [--all]
 sudo sbm domain list | add <域名> | check | token | default | del
 sudo sbm traffic [collect]
+sudo sbm probe [run]      # 国内可达性
+sudo sbm notify list | test
 sudo sbm pool          # 账号池与待清理账号
 sudo sbm sync          # 立即执行每日维护
 sudo sbm --help

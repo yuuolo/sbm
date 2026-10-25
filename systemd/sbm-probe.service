@@ -1,0 +1,9 @@
+[Unit]
+Description=sbm 国内可达性探测：从订阅服务器检测各节点能否访问，异常时告警
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sbm probe run
+TimeoutStartSec=240

@@ -15,6 +15,9 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import re
@@ -23,9 +26,12 @@ import shlex
 import shutil
 import socket
 import sqlite3
+import ssl
 import string
+import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -1248,7 +1254,8 @@ def node_credentials(users, creds):
     按账号名排序：集合不变时配置文件逐字节不变，push_node 判断为 UNCHANGED，节点不会重启。
     同时给还没有统计编号的账号分配编号（写入 creds["marks"]，调用方负责保存）。"""
     items = {u["cred"]: u["password"] for u in users if u["enabled"]}
-    for c in creds["spares"] + creds["retiring"]:
+    # 可达性探测专用账号（从账号池取出，见 probe_credential）也必须一直留在节点上
+    for c in creds["spares"] + creds["retiring"] + ([creds["probe"]] if creds.get("probe") else []):
         items.setdefault(c["name"], c["password"])
     marks = creds.setdefault("marks", {})
     for name in sorted(items):
@@ -1571,6 +1578,467 @@ def write_userinfo_map(conf, users):
     return True
 
 
+# ---------- 告警通知 ----------
+# 渠道配置在 /etc/sbm/notify.json（仅 root 可读）；接口只返回打码后的信息，不返回 Webhook / Token 原文。
+# 订阅服务器在国内连不上 Telegram，Telegram 消息经境外节点用 curl 转发（Token 通过标准输入传递，不出现在命令行里）。
+
+NOTIFY = f"{ETC}/notify.json"
+NOTIFY_TYPES = {"wecom": "企业微信", "feishu": "飞书", "dingtalk": "钉钉", "bark": "Bark", "telegram": "Telegram"}
+URL_PREFIX = {
+    "wecom": ("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=",),
+    "feishu": ("https://open.feishu.cn/open-apis/bot/v2/hook/", "https://open.larksuite.com/open-apis/bot/v2/hook/"),
+    "dingtalk": ("https://oapi.dingtalk.com/robot/send?access_token=",),
+    "bark": ("https://",),
+}
+
+
+def write_private(path, text):
+    """以 600 权限创建临时文件再替换，内容任何时候都不会被其他用户读到。"""
+    tmp = f"{path}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def load_notify():
+    data = load(NOTIFY, {})
+    data.setdefault("channels", [])
+    return data
+
+
+def save_notify(data):
+    write_private(NOTIFY, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def mask_channel(ch):
+    """给界面显示用：只露出主机名和末尾几位。"""
+    tail = lambda s: ("…" + s[-4:]) if s else ""  # noqa: E731
+    if ch["type"] == "telegram":
+        target = f"Bot {tail(ch.get('token', ''))} → {ch.get('chat_id', '')}"
+    else:
+        target = f"{urllib.parse.urlparse(ch.get('url', '')).hostname} {tail(ch.get('url', ''))}"
+    return {"id": ch["id"], "type": ch["type"], "type_name": NOTIFY_TYPES[ch["type"]], "name": ch.get("name", ""),
+            "enabled": ch.get("enabled", True), "target": target, "signed": bool(ch.get("secret"))}
+
+
+def notify_add(data, ctype, name="", url="", secret="", token="", chat_id=""):
+    if ctype not in NOTIFY_TYPES:
+        raise SbmError("不支持的通知类型")
+    ch = {"id": secrets.token_hex(4), "type": ctype, "name": (name or NOTIFY_TYPES[ctype]).strip()[:32], "enabled": True}
+    if ctype == "telegram":
+        token, chat_id = (token or "").strip(), (chat_id or "").strip()
+        if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", token):
+            raise SbmError("Bot Token 格式不对，应为 BotFather 给出的 数字:字母串")
+        if not re.fullmatch(r"-?\d{3,}|@[A-Za-z0-9_]{4,}", chat_id):
+            raise SbmError("Chat ID 格式不对（数字，群组为负数；或 @频道名）")
+        ch.update(token=token, chat_id=chat_id)
+    else:
+        url = (url or "").strip()
+        if not url.startswith(URL_PREFIX[ctype]) or len(url) > 500 or any(c in url for c in " \n\"'"):
+            raise SbmError(f"{NOTIFY_TYPES[ctype]} 地址格式不对，应以 {URL_PREFIX[ctype][0]} 开头")
+        ch["url"] = url
+        if secret and ctype in ("feishu", "dingtalk"):
+            ch["secret"] = secret.strip()
+    data["channels"].append(ch)
+    return ch
+
+
+def _post_json(url, payload):
+    req = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
+                                 headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "sbm"})
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError) as e:
+        raise SbmError(f"连接失败: {e}")
+    try:
+        return json.loads(body)
+    except ValueError:
+        return {"raw": body[:200]}
+
+
+def _telegram_api(conf, token, method, fields):
+    """经境外节点调用 Telegram Bot API。Token 和内容放在 curl 的 -K 配置里，从标准输入传入。"""
+    esc = lambda s: str(s).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")  # noqa: E731
+    cfg = f'url = "https://api.telegram.org/bot{esc(token)}/{method}"\n'
+    cfg += "".join(f'data-urlencode = "{esc(k)}={esc(v)}"\n' for k, v in fields.items())
+    last = "没有可用的节点做转发"
+    for node in conf["nodes"]:
+        r = ssh(node, "curl -s --max-time 15 -K -", stdin=cfg)
+        if r.returncode == 0 and r.stdout.strip():
+            try:
+                return json.loads(r.stdout)
+            except ValueError:
+                last = r.stdout.strip()[:200]
+        else:
+            last = (r.stderr or r.stdout).strip()[:200] or f"经 {node['name']} 转发失败"
+    raise SbmError(f"Telegram 请求失败: {last}")
+
+
+def telegram_chat_id(conf, token):
+    """读取机器人最近收到的消息，找出发消息的聊天 ID（先在 Telegram 里给机器人发一句话）。"""
+    if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", (token or "").strip()):
+        raise SbmError("Bot Token 格式不对")
+    data = _telegram_api(conf, token.strip(), "getUpdates", {})
+    if not data.get("ok"):
+        raise SbmError(f"Telegram 返回错误: {data.get('description', data)}")
+    for upd in reversed(data.get("result", [])):
+        for key in ("message", "channel_post", "my_chat_member", "edited_message"):
+            chat = (upd.get(key) or {}).get("chat")
+            if chat:
+                return {"chat_id": str(chat["id"]), "title": chat.get("title") or chat.get("username") or chat.get("first_name", "")}
+    raise SbmError("机器人还没有收到任何消息：请先在 Telegram 里给机器人发一句话（群组里则 @ 它一次），再点获取")
+
+
+def send_channel(conf, ch, title, text):
+    """发送一条通知，成功返回 None，失败抛出 SbmError。消息里都带有 sbm 字样，便于钉钉「关键词」安全设置。"""
+    content = f"{title}\n{text}"
+    t = ch["type"]
+    if t == "telegram":
+        r = _telegram_api(conf, ch["token"], "sendMessage", {"chat_id": ch["chat_id"], "text": content})
+        if not r.get("ok"):
+            raise SbmError(f"Telegram 返回错误: {r.get('description', r)}")
+        return
+    url = ch["url"]
+    if t == "wecom":
+        r = _post_json(url, {"msgtype": "text", "text": {"content": content}})
+        ok = r.get("errcode") == 0
+    elif t == "dingtalk":
+        if ch.get("secret"):
+            ts = str(int(time.time() * 1000))
+            sign = base64.b64encode(hmac.new(ch["secret"].encode(), f"{ts}\n{ch['secret']}".encode(), hashlib.sha256).digest())
+            url += f"&timestamp={ts}&sign={urllib.parse.quote_plus(sign.decode())}"
+        r = _post_json(url, {"msgtype": "text", "text": {"content": content}})
+        ok = r.get("errcode") == 0
+    elif t == "feishu":
+        payload = {"msg_type": "text", "content": {"text": content}}
+        if ch.get("secret"):
+            ts = str(int(time.time()))
+            payload["timestamp"] = ts
+            payload["sign"] = base64.b64encode(hmac.new(f"{ts}\n{ch['secret']}".encode(), b"", hashlib.sha256).digest()).decode()
+        r = _post_json(url, payload)
+        ok = r.get("code", r.get("StatusCode")) == 0
+    else:  # bark：地址形如 https://api.day.app/<key>
+        r = _post_json(url.rstrip("/"), {"title": title, "body": text, "group": "sbm"})
+        ok = r.get("code") == 200
+    if not ok:
+        raise SbmError(f"{NOTIFY_TYPES[t]} 返回错误: {r.get('errmsg') or r.get('msg') or r.get('message') or r}")
+
+
+def notify_all(conf, title, text, log=print):
+    """发到所有启用的渠道。返回 [(渠道名, 错误或 None)]。"""
+    results = []
+    for ch in load_notify()["channels"]:
+        if not ch.get("enabled", True):
+            continue
+        try:
+            send_channel(conf, ch, title, text)
+            results.append((ch["name"], None))
+        except SbmError as e:
+            results.append((ch["name"], str(e)))
+            log(f"通知发送失败 [{ch['name']}]: {e}")
+    return results
+
+
+# ---------- 国内可达性探测 ----------
+# 订阅服务器在国内，正好用来检测各节点从国内能否访问。每 5 分钟（sbm probe run）依次做：
+#   DNS：用国内 DNS 解析节点域名，看是否得到节点真实 IP（检测域名污染）
+#   TCP / TLS：直连节点 IP，测握手延迟；TLS 带节点域名做 SNI 并校验证书（检测 IP 封锁、SNI 阻断）
+#   代理：本机临时运行 sing-box 客户端，经每个节点真实代理一次请求（最可靠，能发现协议被识别阻断）
+#   境外对照：国内检测失败时，让另一台节点去连它，区分「从国内被封」和「节点本身故障」
+# 连续 2 轮异常才告警，异常期间每 6 小时提醒一次，恢复时再通知。
+
+PROBE_DB = f"{ETC}/probe.db"
+SB_BIN = f"{ETC}/bin/sing-box"
+PROBE_URL = "https://www.gstatic.com/generate_204"
+CN_DNS = "223.5.5.5"
+PROBE_STATUS = {
+    "ok": "正常", "dns": "域名解析异常（疑似 DNS 污染）", "blocked": "疑似被封（境外可连，国内不通）",
+    "down": "节点故障（国内外都连不上）", "unreachable": "国内无法访问", "proxy_fail": "代理不通（TLS 正常）",
+}
+ALERT_AFTER = 2          # 连续几轮异常才告警
+ALERT_REPEAT = 6 * 3600  # 持续异常时的提醒间隔（秒）
+
+
+def probe_db():
+    con = sqlite3.connect(PROBE_DB, timeout=30)
+    con.executescript("""
+        CREATE TABLE IF NOT EXISTS probe (ts INTEGER, node TEXT, status TEXT, dns TEXT, tcp_ms INTEGER, tls_ms INTEGER,
+                                          proxy_ms INTEGER, outside TEXT, detail TEXT);
+        CREATE INDEX IF NOT EXISTS probe_node_ts ON probe (node, ts);
+        CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+    """)
+    os.chmod(PROBE_DB, 0o600)
+    return con
+
+
+def dns_a(domain, server=CN_DNS, timeout=5):
+    """最简单的 UDP DNS A 记录查询，返回 IP 列表。"""
+    q = struct.pack(">HHHHHH", secrets.randbelow(65536), 0x0100, 1, 0, 0, 0)
+    q += b"".join(bytes([len(p)]) + p.encode() for p in domain.split(".")) + b"\x00" + struct.pack(">HH", 1, 1)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.settimeout(timeout)
+        s.sendto(q, (server, 53))
+        data, _ = s.recvfrom(4096)
+    count, i, ips = struct.unpack(">H", data[6:8])[0], 12, []
+    while data[i]:
+        i += data[i] + 1
+    i += 5
+    for _ in range(count):
+        if data[i] & 0xC0 == 0xC0:
+            i += 2
+        else:
+            while data[i]:
+                i += data[i] + 1
+            i += 1
+        rtype, _cls, _ttl, length = struct.unpack(">HHIH", data[i:i + 10])
+        i += 10
+        if rtype == 1:
+            ips.append(socket.inet_ntoa(data[i:i + length]))
+        i += length
+    return ips
+
+
+def node_ip(node):
+    try:
+        ipaddress.ip_address(node["host"])
+        return node["host"]
+    except ValueError:
+        return socket.gethostbyname(node["host"])
+
+
+def _local_checks(node):
+    """DNS / TCP / TLS 三项，在订阅服务器上直接做。"""
+    res = {"dns": "fail", "tcp_ms": None, "tls_ms": None, "err": []}
+    try:
+        ip = node_ip(node)
+    except OSError as e:
+        res["err"].append(f"解析节点地址失败: {e}")
+        return res
+    try:
+        ips = dns_a(node["server"])
+        res["dns"] = "ok" if ip in ips else ("mismatch" if ips else "empty")
+        if res["dns"] != "ok":
+            res["err"].append(f"国内 DNS 解析 {node['server']} 得到 {', '.join(ips) or '空结果'}，节点 IP 是 {ip}")
+    except OSError as e:
+        res["err"].append(f"国内 DNS 查询失败: {e}")
+    t0 = time.monotonic()
+    try:
+        with socket.create_connection((ip, node["port"]), timeout=5):
+            res["tcp_ms"] = int((time.monotonic() - t0) * 1000)
+    except OSError as e:
+        res["err"].append(f"TCP 连接失败: {e}")
+        return res
+    t0 = time.monotonic()
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((ip, node["port"]), timeout=6) as raw:
+            with ctx.wrap_socket(raw, server_hostname=node["sni"]):
+                res["tls_ms"] = int((time.monotonic() - t0) * 1000)
+    except (OSError, ssl.SSLError) as e:
+        res["err"].append(f"TLS 握手失败: {e}")
+    return res
+
+
+def probe_credential():
+    """探测专用账号：从账号池里取一个（它本来就在所有节点上，不需要重启节点）。"""
+    with locked():
+        creds = load_creds()
+        if not creds.get("probe") and creds["spares"]:
+            creds["probe"] = creds["spares"].pop()
+            save_creds(creds)
+        return creds.get("probe")
+
+
+def ensure_singbox_bin(conf):
+    """本机做代理检测用的 sing-box：没有时从任一节点复制一份（节点与订阅服务器同为 x86_64 Linux）。"""
+    if os.access(SB_BIN, os.X_OK):
+        return SB_BIN
+    os.makedirs(os.path.dirname(SB_BIN), mode=0o700, exist_ok=True)
+    for node in conf["nodes"]:
+        args = ["ssh", "-i", node["ssh_key"], "-p", str(node.get("ssh_port", 22)), "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=10", f"{node['ssh_user']}@{node['host']}", "cat $(command -v sing-box)"]
+        r = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL)
+        if r.returncode == 0 and r.stdout[:4] == b"\x7fELF":
+            with open(f"{SB_BIN}.tmp", "wb") as f:
+                f.write(r.stdout)
+            os.chmod(f"{SB_BIN}.tmp", 0o700)
+            if subprocess.run([f"{SB_BIN}.tmp", "version"], capture_output=True).returncode == 0:
+                os.replace(f"{SB_BIN}.tmp", SB_BIN)
+                return SB_BIN
+    return None
+
+
+def _proxy_checks(conf, cred, sb_bin):
+    """本机临时运行 sing-box：每个节点一个本地入口，经节点真实请求一次，返回 {节点: (毫秒或 None, 错误)}。"""
+    nodes = conf["nodes"]
+    base = 31000 + secrets.randbelow(2000)
+    cfg = {
+        "log": {"level": "error"},
+        "dns": {"servers": [{"type": "udp", "tag": "cn", "server": CN_DNS}]},
+        "inbounds": [{"type": "mixed", "tag": f"in{i}", "listen": "127.0.0.1", "listen_port": base + i}
+                     for i in range(len(nodes))],
+        "outbounds": [dict(outbound_singbox(n, {"password": cred["password"]}), tag=f"out{i}") for i, n in enumerate(nodes)]
+        + [{"type": "direct", "tag": "direct"}],
+        "route": {"rules": [{"inbound": [f"in{i}"], "outbound": f"out{i}"} for i in range(len(nodes))],
+                  "default_domain_resolver": "cn"},
+    }
+    tmp = tempfile.mkdtemp(prefix="sbm-probe-")
+    path = os.path.join(tmp, "probe.json")
+    write_private(path, json.dumps(cfg))
+    proc = subprocess.Popen([sb_bin, "run", "-c", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    results = {}
+    try:
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:  # 等本地入口全部就绪
+            try:
+                with socket.create_connection(("127.0.0.1", base + len(nodes) - 1), timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.2)
+
+        def one(i):
+            r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "--max-time", "12",
+                                "-x", f"socks5h://127.0.0.1:{base + i}", PROBE_URL], capture_output=True, text=True)
+            code, _, secs = r.stdout.partition(" ")
+            if code == "204":
+                return nodes[i]["name"], (int(float(secs) * 1000), "")
+            return nodes[i]["name"], (None, f"代理请求失败（HTTP {code or '无响应'}，curl {r.returncode}）")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = dict(pool.map(one, range(len(nodes))))
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        shutil.rmtree(tmp, ignore_errors=True)
+    return results
+
+
+def _outside_check(conf, target):
+    """让另一台节点从境外连目标节点（TLS 握手 + 证书校验），区分被墙和节点故障。"""
+    ip, port, sni = node_ip(target), target["port"], target["sni"]
+    cmd = (f"timeout 10 openssl s_client -connect {shlex.quote(ip)}:{int(port)} -servername {shlex.quote(sni)} "
+           "-verify_return_error </dev/null >/dev/null 2>&1 && echo OK || echo FAIL")
+    for node in conf["nodes"]:
+        if node["name"] == target["name"]:
+            continue
+        r = ssh(node, cmd)
+        if r.returncode == 0 and r.stdout.strip() in ("OK", "FAIL"):
+            return "ok" if r.stdout.strip() == "OK" else "fail", node["name"]
+    return "n/a", ""
+
+
+def _classify(local, proxy, outside):
+    proxy_ms, _ = proxy if proxy else (None, "")
+    if proxy_ms is not None:
+        return "ok"
+    if proxy is None and local["tls_ms"] is not None:  # 还没有代理检测条件时，以 TLS 为准
+        return "ok"
+    if local["tcp_ms"] is None or local["tls_ms"] is None:
+        return {"ok": "blocked", "fail": "down"}.get(outside, "unreachable")
+    if local["dns"] in ("mismatch", "empty"):
+        return "dns"
+    return "proxy_fail"
+
+
+def probe_run(conf, log=print):
+    """检测所有节点一次，入库、按需告警，返回每个节点的结果。"""
+    nodes = conf["nodes"]
+    if not nodes:
+        return {}
+    cred, sb_bin = probe_credential(), ensure_singbox_bin(conf)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        local = dict(zip([n["name"] for n in nodes], pool.map(_local_checks, nodes)))
+    proxy = _proxy_checks(conf, cred, sb_bin) if cred and sb_bin else {}
+    now = int(time.time())
+    results = {}
+    for n in nodes:
+        name, loc, px = n["name"], local[n["name"]], proxy.get(n["name"])
+        outside, via = ("", "")
+        if (px is None or px[0] is None) and (loc["tcp_ms"] is None or loc["tls_ms"] is None):
+            outside, via = _outside_check(conf, n)
+        status = _classify(loc, px, outside)
+        detail = loc["err"] + ([px[1]] if px and px[1] else [])
+        if outside:
+            detail.append(f"境外对照（经 {via}）：{'可以连接' if outside == 'ok' else '也连不上' if outside == 'fail' else '无可用对照节点'}")
+        results[name] = {"status": status, "label": PROBE_STATUS[status], "dns": loc["dns"], "tcp_ms": loc["tcp_ms"],
+                         "tls_ms": loc["tls_ms"], "proxy_ms": px[0] if px else None, "outside": outside,
+                         "detail": detail, "proxy_tested": bool(px)}
+        log(f"[{name}] {PROBE_STATUS[status]}  TCP {loc['tcp_ms']} ms  TLS {loc['tls_ms']} ms  "
+            f"代理 {px[0] if px else '未测'} ms" + (f"  ({'；'.join(detail)})" if detail else ""))
+    con = probe_db()
+    with con:
+        for name, r in results.items():
+            con.execute("INSERT INTO probe VALUES (?,?,?,?,?,?,?,?,?)",
+                        (now, name, r["status"], r["dns"], r["tcp_ms"], r["tls_ms"], r["proxy_ms"], r["outside"],
+                         json.dumps(r["detail"], ensure_ascii=False)))
+        con.execute("DELETE FROM probe WHERE ts < ?", (now - 14 * 86400,))
+        state = json.loads((con.execute("SELECT v FROM meta WHERE k='state'").fetchone() or ["{}"])[0])
+        alerts = []  # 先记下来，提交数据库之后再发，避免慢的通知占着数据库
+        for name, r in results.items():
+            st = state.get(name, {"fails": 0, "alerted": 0, "since": now})
+            if r["status"] == "ok":
+                if st.get("alerted"):
+                    alerts.append((f"🟢 sbm 节点恢复：{name}",
+                                   f"{name} 已恢复，国内访问正常（代理延迟 {r['proxy_ms']} ms）。\n"
+                                   f"异常持续了约 {max(1, (now - st['since']) // 60)} 分钟。"))
+                st = {"fails": 0, "alerted": 0, "since": now}
+            else:
+                st["since"] = st["since"] if st["fails"] else now
+                st["fails"] += 1
+                if st["fails"] >= ALERT_AFTER and now - st.get("alerted", 0) >= ALERT_REPEAT:
+                    alerts.append((f"🔴 sbm 节点异常：{name}",
+                                   f"{r['label']}\n" + "\n".join(f"· {d}" for d in r["detail"])
+                                   + f"\n已持续约 {max(1, (now - st['since']) // 60)} 分钟。"))
+                    st["alerted"] = now
+            state[name] = st
+        state = {k: v for k, v in state.items() if k in results}
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('state', ?)", (json.dumps(state),))
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('last_run', ?)", (str(now),))
+    con.close()
+    for title, text in alerts:
+        notify_all(conf, title, text, log)
+    return results
+
+
+def probe_summary(conf):
+    """每个节点最近一次结果 + 最近 24 小时可用率、平均代理延迟。"""
+    if not os.path.exists(PROBE_DB):
+        return {"enabled": False, "nodes": {}, "last_run": None}
+    con = probe_db()
+    since = int(time.time()) - 86400
+    out = {}
+    for n in conf["nodes"]:
+        row = con.execute("SELECT ts, status, dns, tcp_ms, tls_ms, proxy_ms, outside, detail FROM probe "
+                          "WHERE node=? ORDER BY ts DESC LIMIT 1", (n["name"],)).fetchone()
+        if not row:
+            continue
+        total, good, avg = con.execute("SELECT COUNT(*), SUM(status='ok'), AVG(CASE WHEN status='ok' THEN proxy_ms END) "
+                                       "FROM probe WHERE node=? AND ts>=?", (n["name"], since)).fetchone()
+        out[n["name"]] = {"ts": row[0], "status": row[1], "label": PROBE_STATUS.get(row[1], row[1]), "dns": row[2],
+                          "tcp_ms": row[3], "tls_ms": row[4], "proxy_ms": row[5], "outside": row[6],
+                          "detail": json.loads(row[7] or "[]"),
+                          "uptime_24h": round(100 * (good or 0) / total, 1) if total else None,
+                          "avg_proxy_ms": int(avg) if avg else None, "samples_24h": total}
+    last = con.execute("SELECT v FROM meta WHERE k='last_run'").fetchone()
+    con.close()
+    return {"enabled": True, "nodes": out, "last_run": int(last[0]) if last else None}
+
+
+def probe_history(node_name, hours=24):
+    con = probe_db()
+    rows = con.execute("SELECT ts, status, tcp_ms, tls_ms, proxy_ms, detail FROM probe WHERE node=? AND ts>=? ORDER BY ts",
+                       (node_name, int(time.time()) - hours * 3600)).fetchall()
+    con.close()
+    return [{"ts": r[0], "status": r[1], "label": PROBE_STATUS.get(r[1], r[1]), "tcp_ms": r[2], "tls_ms": r[3],
+             "proxy_ms": r[4], "detail": json.loads(r[5] or "[]")} for r in rows]
+
+
 # ---------- 命令 ----------
 
 def cmd_user(args, conf):
@@ -1704,6 +2172,39 @@ def cmd_traffic(args, conf):
         print("\n采集失败的节点: " + "; ".join(f"{n}（{e}）" for n, e in bad.items()))
 
 
+def cmd_probe(args, conf):
+    if args.action == "run":
+        probe_run(conf, log=print if args.verbose else (lambda *_: None))
+        if not args.verbose:
+            return
+        print()
+    s = probe_summary(conf)
+    if not s["enabled"] or not s["nodes"]:
+        die("还没有探测数据，运行 sbm probe run 立即检测一次")
+    print(f"国内可达性（上次检测 {datetime.fromtimestamp(s['last_run']):%m-%d %H:%M}）\n")
+    for name, r in s["nodes"].items():
+        up = f"{r['uptime_24h']}%" if r["uptime_24h"] is not None else "—"
+        print(f"  {name:<16}{r['label']:<24}代理 {r['proxy_ms'] or '—'} ms  TCP {r['tcp_ms'] or '—'} ms  24 小时可用率 {up}")
+        for d in r["detail"]:
+            print(f"      · {d}")
+
+
+def cmd_notify(args, conf):
+    data = load_notify()
+    if args.action == "list":
+        if not data["channels"]:
+            print("还没有通知渠道，请在控制台「通知」里添加")
+        for ch in data["channels"]:
+            m = mask_channel(ch)
+            print(f"  [{m['id']}] {m['type_name']:<8}{m['name']:<16}{'启用' if m['enabled'] else '停用'}  {m['target']}")
+        return
+    results = notify_all(conf, "🔔 sbm 测试通知", f"这是一条测试消息，发送时间 {datetime.now():%Y-%m-%d %H:%M}。")
+    if not results:
+        die("没有启用的通知渠道")
+    for name, err in results:
+        print(f"  {name}: {'成功' if not err else '失败 ' + err}")
+
+
 def cmd_pool(conf):
     creds = load_creds()
     print(f"备用账号: {len(creds['spares'])}/{pool_size(conf)}")
@@ -1823,6 +2324,11 @@ def main():
     pd.add_argument("--note", help="add: 备注")
     sub.add_parser("sync", help="维护：清理旧账号、补满账号池并推送到所有节点（只有变化的节点会重启）")
     sub.add_parser("pool", help="查看账号池和待清理账号")
+    pp = sub.add_parser("probe", help="国内可达性：sbm probe 查看；sbm probe run 立即检测（定时器每 5 分钟运行）")
+    pp.add_argument("action", nargs="?", choices=["show", "run"], default="show")
+    pp.add_argument("-v", "--verbose", action="store_true", help="run: 显示每个节点的检测过程")
+    pf = sub.add_parser("notify", help="告警通知：sbm notify list 查看渠道；sbm notify test 发送测试消息")
+    pf.add_argument("action", choices=["list", "test"])
     pt = sub.add_parser("traffic", help="流量统计：sbm traffic 查看本月；sbm traffic collect 采集一次（定时器使用）")
     pt.add_argument("action", nargs="?", choices=["show", "collect"], default="show")
     pt.add_argument("-v", "--verbose", action="store_true", help="collect: 显示每个节点的采集结果")
@@ -1867,6 +2373,10 @@ def main():
                 die(str(e))
     elif args.cmd == "pool":
         cmd_pool(conf)
+    elif args.cmd == "probe":
+        cmd_probe(args, conf)
+    elif args.cmd == "notify":
+        cmd_notify(args, conf)
     elif args.cmd == "traffic":
         cmd_traffic(args, conf)
     elif args.cmd == "build":

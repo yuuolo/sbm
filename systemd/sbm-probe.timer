@@ -1,0 +1,11 @@
+[Unit]
+Description=每 5 分钟检测一次各节点的国内可达性
+
+[Timer]
+# 与流量采集（整 5 分钟）错开 2 分钟
+OnCalendar=*:2/5
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

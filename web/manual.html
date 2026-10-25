@@ -98,6 +98,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <a class="sub" href="#attach">接入已有节点</a>
   <a class="sub" href="#status">状态卡片怎么看</a>
   <a class="sub" href="#upgrade">升级 sing-box</a>
+  <a class="sub" href="#probe">国内可达性与告警</a>
   <a href="#certs">4. 证书与域名</a>
   <a class="sub" href="#domains">多个域名与 Token</a>
   <a href="#cli">5. 命令行参考</a>
@@ -294,6 +295,27 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <li>升级前备份配置和旧程序；新版本校验配置失败或启动失败会<b>自动回滚</b>。</li>
   <li>每个节点升级时会重启一次，建议在用户少的时候操作。</li>
 </ul>
+
+<h3 id="probe">国内可达性检测与告警</h3>
+<p>订阅服务器在国内，每 5 分钟（定时任务 <code>sbm-probe.timer</code>）从国内检测一次每个节点，节点卡片上的「国内可达」显示结果、代理延迟和 24 小时可用率，点它可以看 24 小时记录。也可以点节点区的 <b>立即检测</b>。</p>
+<div class="table-wrap"><table>
+  <tr><th>检测项</th><th>做法</th><th>发现什么问题</th></tr>
+  <tr><td>国内 DNS</td><td>用 223.5.5.5 解析节点域名，看是否得到节点真实 IP</td><td>域名被污染</td></tr>
+  <tr><td>TCP / TLS</td><td>直连节点 IP 测握手延迟；TLS 带节点域名并校验证书</td><td>IP 被封、SNI 阻断、证书问题</td></tr>
+  <tr><td>经节点代理</td><td>订阅服务器上临时运行 sing-box，经节点真实请求一次</td><td>协议被识别阻断、节点服务异常（最可靠）</td></tr>
+  <tr><td>境外对照</td><td>国内连不上时，让另一台节点从境外去连</td><td>区分「被封」和「节点故障」</td></tr>
+</table></div>
+<div class="table-wrap"><table>
+  <tr><th>状态</th><th>含义与处理</th></tr>
+  <tr><td>正常</td><td>国内可以经节点正常代理</td></tr>
+  <tr><td>疑似被封</td><td>国内连不上，境外能连：IP 或端口很可能被封。可以换 IP 或换服务器重新「一键部署」，再移除旧节点</td></tr>
+  <tr><td>节点故障</td><td>国内外都连不上：服务器宕机、sing-box 停止或服务商网络问题，到服务商控制台检查</td></tr>
+  <tr><td>国内无法访问</td><td>国内连不上，且没有其他节点可做境外对照（只有一个节点时）</td></tr>
+  <tr><td>DNS 污染</td><td>TLS 正常但国内 DNS 解析结果不对：可以给节点换一个域名（域名管理里换主域名或前缀重新部署）</td></tr>
+  <tr><td>代理不通</td><td>TLS 正常但代理请求失败：可能协议被识别阻断，或节点上 sing-box 配置异常；先看节点卡片是否「运行中」</td></tr>
+</table></div>
+<p><b>告警：</b>点控制台右上角 <b>通知</b> 添加渠道（企业微信、飞书、钉钉群机器人，Bark，Telegram），每个渠道可以单独测试、停用。某节点<b>连续 2 次</b>检测异常时发告警，异常持续时每 6 小时提醒一次，恢复时再通知。Telegram 从国内连不上，消息会经境外节点转发；钉钉若用「自定义关键词」安全设置，关键词填 <code>sbm</code>。Webhook 和 Token 保存在 <code>/etc/sbm/notify.json</code>（仅 root 可读），控制台只显示打码后的信息。</p>
+<p><b>其他说明：</b>代理检测使用从账号池取出的一个专用账号（它本来就在所有节点上，不需要重启节点），产生的流量很小且不计入任何用户；订阅服务器上做检测用的 sing-box 从节点复制而来，放在 <code>/etc/sbm/bin/</code>。检测记录保留 14 天。</p>
 </section>
 
 <section id="certs">
@@ -331,6 +353,12 @@ sudo sbm user disable alice [--now]        <span class="c"># 停用；--now 立�
 sudo sbm user enable alice
 sudo sbm user del alice [--now]            <span class="c"># 删除；--now 立即踢下线</span>
 sudo sbm user reset alice [--later]        <span class="c"># 重置；默认立即生效，--later 凌晨生效</span>
+
+<span class="c"># 国内可达性与告警</span>
+sudo sbm probe                             <span class="c"># 各节点国内可达性与 24 小时可用率</span>
+sudo sbm probe run -v                      <span class="c"># 立即检测一次并显示过程</span>
+sudo sbm notify list                       <span class="c"># 已设置的通知渠道（打码显示）</span>
+sudo sbm notify test                       <span class="c"># 向所有启用的渠道发测试消息</span>
 
 <span class="c"># 流量统计</span>
 sudo sbm traffic                           <span class="c"># 本月各用户流量</span>
@@ -399,6 +427,7 @@ sudo sbm domain del example.com            <span class="c"># 删除未使用的�
   /etc/nginx/sbm-admin.htpasswd /etc/systemd/system/sbm-web.service \
   /etc/systemd/system/sbm-maintain.service /etc/systemd/system/sbm-maintain.timer \
   /etc/systemd/system/sbm-traffic.service /etc/systemd/system/sbm-traffic.timer \
+  /etc/systemd/system/sbm-probe.service /etc/systemd/system/sbm-probe.timer \
   /usr/local/share/sbm</code></pre>
 <p>然后在你自己的电脑上下载保存（PowerShell）：</p>
 <pre><code>scp ubuntu@{{MANAGER_IP}}:~/sbm-backup-*.tar.gz .</code></pre>
@@ -407,6 +436,7 @@ sudo sbm domain del example.com            <span class="c"># 删除未使用的�
   <tr><td><code>/etc/sbm/users.json</code></td><td>用户、密码、订阅令牌（最重要）</td></tr>
   <tr><td><code>/etc/sbm/creds.json</code></td><td>账号池、待清理账号、流量统计编号</td></tr>
   <tr><td><code>/etc/sbm/traffic.db</code></td><td>流量统计数据</td></tr>
+  <tr><td><code>/etc/sbm/notify.json</code>、<code>/etc/sbm/probe.db</code></td><td>告警通知渠道（含 Webhook / Token）、可达性检测记录</td></tr>
   <tr><td><code>/etc/sbm/config.json</code></td><td>订阅域名、节点列表</td></tr>
   <tr><td><code>/root/.ssh/sbm_node</code></td><td>管理节点用的 SSH 私钥</td></tr>
   <tr><td><code>/etc/letsencrypt/</code></td><td>证书和 Cloudflare Token</td></tr>
