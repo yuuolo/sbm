@@ -15,6 +15,7 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import glob
 import hashlib
 import hmac
 import ipaddress
@@ -31,6 +32,7 @@ import string
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -1245,6 +1247,12 @@ def pool_size(conf):
     return int(conf.get("pool_size", POOL_SIZE))
 
 
+def pool_low(conf):
+    """低水位：备用账号少于它时才补满。补充会改变节点上的账号集合（要重启节点），
+    所以不是每次用掉一个就补，而是攒到一半再一次补齐，夜间重启次数大大减少。"""
+    return int(conf.get("pool_low", max(1, pool_size(conf) // 2)))
+
+
 def new_cred(password=None):
     return {"name": "s-" + secrets.token_hex(5), "password": password or rand(24)}
 
@@ -1369,8 +1377,9 @@ def reconcile(conf, users, creds, log=print):
         collect(conf, users, creds, log=lambda *_: None)
     except Exception as e:  # noqa: BLE001 - 统计失败不能阻止推送账号
         log(f"⚠ 流量统计采集失败（不影响本次同步）: {e}")
-    while len(creds["spares"]) < target:
-        creds["spares"].append(new_cred())
+    if len(creds["spares"]) < pool_low(conf):
+        while len(creds["spares"]) < target:
+            creds["spares"].append(new_cred())
     purged = len(creds["retiring"])
     creds["retiring"] = []
     cred_list = node_credentials(users, creds)
@@ -1728,8 +1737,21 @@ def send_channel(conf, ch, title, text):
         raise SbmError(f"{NOTIFY_TYPES[t]} 返回错误: {r.get('errmsg') or r.get('msg') or r.get('message') or r}")
 
 
+ALERTS = f"{ETC}/alerts.json"
+ALERT_HISTORY_KEEP = 200
+
+
+@contextlib.contextmanager
+def alerts_locked():
+    """告警状态单独一把锁：探测、健康检查、备份可能同时发告警，又不想占用用户操作的大锁。"""
+    with open(f"{ETC}/.alerts.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
 def notify_all(conf, title, text, log=print):
-    """发到所有启用的渠道。返回 [(渠道名, 错误或 None)]。"""
+    """发到所有启用的渠道，并记入告警历史（没有渠道时也记录，控制台能看到本该发出的内容）。
+    返回 [(渠道名, 错误或 None)]。"""
     results = []
     for ch in load_notify()["channels"]:
         if not ch.get("enabled", True):
@@ -1740,7 +1762,39 @@ def notify_all(conf, title, text, log=print):
         except SbmError as e:
             results.append((ch["name"], str(e)))
             log(f"通知发送失败 [{ch['name']}]: {e}")
+    with alerts_locked():
+        st = load(ALERTS, {})
+        hist = st.setdefault("history", [])
+        hist.append({"ts": int(time.time()), "title": title, "text": text,
+                     "sent": [n for n, e in results if not e], "failed": [n for n, e in results if e]})
+        st["history"] = hist[-ALERT_HISTORY_KEEP:]
+        write_private(ALERTS, json.dumps(st, ensure_ascii=False, indent=1) + "\n")
     return results
+
+
+def alert(conf, key, active, title, text, recover=None, need=1, repeat=6 * 3600, log=print):
+    """有状态的告警：
+    active 连续出现 need 次后发出；持续期间每 repeat 秒提醒一次；
+    恢复（active 为假）时如果之前发过告警，发送 recover=(标题, 正文)。"""
+    now = int(time.time())
+    fire = recovered = False
+    with alerts_locked():
+        st = load(ALERTS, {})
+        act, cnt = st.setdefault("active", {}), st.setdefault("count", {})
+        if active:
+            cnt[key] = cnt.get(key, 0) + 1
+            a = act.get(key)
+            if cnt[key] >= need and (not a or now - a["last"] >= repeat):
+                act[key] = {"since": (a or {}).get("since", now), "last": now, "title": title}
+                fire = True
+        else:
+            cnt.pop(key, None)
+            recovered = act.pop(key, None) is not None
+        write_private(ALERTS, json.dumps(st, ensure_ascii=False, indent=1) + "\n")
+    if fire:
+        notify_all(conf, title, text, log)
+    elif recovered and recover:
+        notify_all(conf, recover[0], recover[1], log)
 
 
 # ---------- 国内可达性探测 ----------
@@ -1771,6 +1825,8 @@ def probe_db():
         CREATE INDEX IF NOT EXISTS probe_node_ts ON probe (node, ts);
         CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
     """)
+    if "cert_days" not in [c[1] for c in con.execute("PRAGMA table_info(probe)")]:
+        con.execute("ALTER TABLE probe ADD COLUMN cert_days INTEGER")  # 旧库升级
     os.chmod(PROBE_DB, 0o600)
     return con
 
@@ -1812,7 +1868,7 @@ def node_ip(node):
 
 def _local_checks(node):
     """DNS / TCP / TLS 三项，在订阅服务器上直接做。"""
-    res = {"dns": "fail", "tcp_ms": None, "tls_ms": None, "err": []}
+    res = {"dns": "fail", "tcp_ms": None, "tls_ms": None, "cert_days": None, "err": []}
     try:
         ip = node_ip(node)
     except OSError as e:
@@ -1836,8 +1892,12 @@ def _local_checks(node):
     try:
         ctx = ssl.create_default_context()
         with socket.create_connection((ip, node["port"]), timeout=6) as raw:
-            with ctx.wrap_socket(raw, server_hostname=node["sni"]):
+            with ctx.wrap_socket(raw, server_hostname=node["sni"]) as tls:
                 res["tls_ms"] = int((time.monotonic() - t0) * 1000)
+                # 节点实际出示的证书还剩几天（包括节点自己续期的「接入」节点）
+                not_after = tls.getpeercert().get("notAfter")
+                if not_after:
+                    res["cert_days"] = int((ssl.cert_time_to_seconds(not_after) - time.time()) // 86400)
     except (OSError, ssl.SSLError) as e:
         res["err"].append(f"TLS 握手失败: {e}")
     return res
@@ -1968,15 +2028,16 @@ def probe_run(conf, log=print):
             detail.append(f"境外对照（经 {via}）：{'可以连接' if outside == 'ok' else '也连不上' if outside == 'fail' else '无可用对照节点'}")
         results[name] = {"status": status, "label": PROBE_STATUS[status], "dns": loc["dns"], "tcp_ms": loc["tcp_ms"],
                          "tls_ms": loc["tls_ms"], "proxy_ms": px[0] if px else None, "outside": outside,
-                         "detail": detail, "proxy_tested": bool(px)}
+                         "detail": detail, "proxy_tested": bool(px), "cert_days": loc["cert_days"]}
         log(f"[{name}] {PROBE_STATUS[status]}  TCP {loc['tcp_ms']} ms  TLS {loc['tls_ms']} ms  "
             f"代理 {px[0] if px else '未测'} ms" + (f"  ({'；'.join(detail)})" if detail else ""))
     con = probe_db()
     with con:
         for name, r in results.items():
-            con.execute("INSERT INTO probe VALUES (?,?,?,?,?,?,?,?,?)",
+            con.execute("INSERT INTO probe (ts, node, status, dns, tcp_ms, tls_ms, proxy_ms, outside, detail, cert_days) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
                         (now, name, r["status"], r["dns"], r["tcp_ms"], r["tls_ms"], r["proxy_ms"], r["outside"],
-                         json.dumps(r["detail"], ensure_ascii=False)))
+                         json.dumps(r["detail"], ensure_ascii=False), r["cert_days"]))
         con.execute("DELETE FROM probe WHERE ts < ?", (now - 14 * 86400,))
         state = json.loads((con.execute("SELECT v FROM meta WHERE k='state'").fetchone() or ["{}"])[0])
         alerts = []  # 先记下来，提交数据库之后再发，避免慢的通知占着数据库
@@ -2014,7 +2075,7 @@ def probe_summary(conf):
     since = int(time.time()) - 86400
     out = {}
     for n in conf["nodes"]:
-        row = con.execute("SELECT ts, status, dns, tcp_ms, tls_ms, proxy_ms, outside, detail FROM probe "
+        row = con.execute("SELECT ts, status, dns, tcp_ms, tls_ms, proxy_ms, outside, detail, cert_days FROM probe "
                           "WHERE node=? ORDER BY ts DESC LIMIT 1", (n["name"],)).fetchone()
         if not row:
             continue
@@ -2022,7 +2083,7 @@ def probe_summary(conf):
                                        "FROM probe WHERE node=? AND ts>=?", (n["name"], since)).fetchone()
         out[n["name"]] = {"ts": row[0], "status": row[1], "label": PROBE_STATUS.get(row[1], row[1]), "dns": row[2],
                           "tcp_ms": row[3], "tls_ms": row[4], "proxy_ms": row[5], "outside": row[6],
-                          "detail": json.loads(row[7] or "[]"),
+                          "detail": json.loads(row[7] or "[]"), "cert_days": row[8],
                           "uptime_24h": round(100 * (good or 0) / total, 1) if total else None,
                           "avg_proxy_ms": int(avg) if avg else None, "samples_24h": total}
     last = con.execute("SELECT v FROM meta WHERE k='last_run'").fetchone()
@@ -2037,6 +2098,306 @@ def probe_history(node_name, hours=24):
     con.close()
     return [{"ts": r[0], "status": r[1], "label": PROBE_STATUS.get(r[1], r[1]), "tcp_ms": r[2], "tls_ms": r[3],
              "proxy_ms": r[4], "detail": json.loads(r[5] or "[]")} for r in rows]
+
+
+# ---------- 备份 ----------
+# 每天 03:30（sbm-backup.timer）打包配置、用户、账号池、证书与 Token、管理密钥和统计库，本机保留 14 份；
+# 再用 AES-256 加密后复制一份到境外节点（/root/sbm-backups）。备份里有全部密钥，所以异地副本必须加密；
+# 解密密钥只在订阅服务器上（/etc/sbm/backup.key），需要管理员另行保存，否则订阅服务器丢失时无法解密。
+
+BACKUP_DIR = "/var/backups/sbm"
+BACKUP_KEY = f"{ETC}/backup.key"
+BACKUP_STATE = f"{ETC}/backup.json"
+BACKUP_KEEP = 14
+BACKUP_RE = re.compile(r"^sbm-\d{8}-\d{6}\.tar\.gz$")
+OFFSITE_DIR = "/root/sbm-backups"
+
+
+def backup_key():
+    if not os.path.exists(BACKUP_KEY):
+        write_private(BACKUP_KEY, secrets.token_urlsafe(32) + "\n")
+    with open(BACKUP_KEY, encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def _backup_paths():
+    fixed = ["etc/sbm", "etc/letsencrypt", "root/.ssh/sbm_node", "root/.ssh/sbm_node.pub",
+             "etc/nginx/sbm-admin.htpasswd", "etc/nginx/sites-available/sub.conf",
+             "usr/local/bin/sbm", "opt/sbm-web", "usr/local/share/sbm"]
+    units = sorted(p[1:] for p in glob.glob("/etc/systemd/system/sbm-*"))
+    return [p for p in fixed + units if os.path.exists("/" + p)]
+
+
+def backup_run(conf, log=print):
+    """做一次备份并复制到异地，返回状态。失败时告警。"""
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    backup_key()
+    now = int(time.time())
+    name = f"sbm-{datetime.now():%Y%m%d-%H%M%S}.tar.gz"
+    out = os.path.join(BACKUP_DIR, name)
+    tmp = tempfile.mkdtemp(prefix="sbm-backup-")
+    state = load(BACKUP_STATE, {})
+    error = ""
+    try:
+        # SQLite 正在写入时直接打包可能得到损坏的文件，先用在线备份接口取一致的快照
+        snap = os.path.join(tmp, "snap")
+        os.makedirs(os.path.join(snap, "etc/sbm"))
+        dbs = [f for f in ("traffic.db", "probe.db") if os.path.exists(f"{ETC}/{f}")]
+        for f in dbs:
+            src, dst = sqlite3.connect(f"{ETC}/{f}", timeout=30), sqlite3.connect(os.path.join(snap, "etc/sbm", f))
+            src.backup(dst)
+            dst.close()
+            src.close()
+        # 用 tarfile 而不是 tar 命令：tar 的 --exclude 会连同后面以同名加入的快照一起排除掉
+        skip = {f"etc/sbm/{f}" for f in dbs}
+
+        def keep(info):
+            n = info.name
+            if n == "etc/sbm/bin" or n.startswith("etc/sbm/bin/") or n in skip or n.endswith((".tmp", ".part")) \
+                    or os.path.basename(n).endswith(".lock"):
+                return None
+            return info
+        old = os.umask(0o077)
+        try:
+            with tarfile.open(out + ".part", "w:gz") as tar:
+                for p in _backup_paths():
+                    tar.add("/" + p, arcname=p, filter=keep)
+                for f in dbs:  # 一致性快照放回原来的位置
+                    tar.add(os.path.join(snap, "etc/sbm", f), arcname=f"etc/sbm/{f}")
+        except (OSError, tarfile.TarError) as e:
+            raise SbmError(f"打包失败: {e}")
+        finally:
+            os.umask(old)
+        os.replace(out + ".part", out)
+        size = os.path.getsize(out)
+        for f in sorted(f for f in os.listdir(BACKUP_DIR) if BACKUP_RE.match(f))[:-BACKUP_KEEP]:
+            os.remove(os.path.join(BACKUP_DIR, f))
+        state.update(last_ok=now, last_file=name, last_size=size)
+        log(f"本机备份完成: {out}（{fmt_bytes(size)}）")
+        # 异地副本：加密后经 SSH 复制到第一台可连接的节点
+        enc = os.path.join(tmp, name + ".enc")
+        r = subprocess.run(["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-salt",
+                            "-in", out, "-out", enc, "-pass", f"file:{BACKUP_KEY}"], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SbmError(f"加密失败: {r.stderr.strip()[-300:]}")
+        with open(enc, "rb") as f:
+            data = f.read()
+        offsite = {"ok": False, "ts": now, "node": "", "file": name + ".enc", "error": "没有可用的节点"}
+        cmd = (f"mkdir -p {OFFSITE_DIR} && chmod 700 {OFFSITE_DIR} && cat > {OFFSITE_DIR}/{name}.enc.part"
+               f" && mv {OFFSITE_DIR}/{name}.enc.part {OFFSITE_DIR}/{name}.enc"
+               f" && ls -1t {OFFSITE_DIR}/sbm-*.tar.gz.enc | tail -n +{BACKUP_KEEP + 1} | xargs -r rm -f && echo OK")
+        for node in conf["nodes"]:
+            args = ["ssh", "-i", node["ssh_key"], "-p", str(node.get("ssh_port", 22)), "-o", "BatchMode=yes",
+                    "-o", "ConnectTimeout=10", f"{node['ssh_user']}@{node['host']}", cmd]
+            rr = subprocess.run(args, input=data, capture_output=True)
+            if rr.returncode == 0 and b"OK" in rr.stdout:
+                offsite.update(ok=True, node=node["name"], error="")
+                log(f"异地副本已加密保存到 {node['name']}:{OFFSITE_DIR}/{name}.enc")
+                break
+            offsite["error"] = rr.stderr.decode("utf-8", "replace").strip()[-200:] or f"复制到 {node['name']} 失败"
+        state["offsite"] = offsite
+        if not offsite["ok"]:
+            log(f"⚠ 异地副本失败: {offsite['error']}")
+    except (SbmError, OSError, sqlite3.Error) as e:
+        error = str(e)
+        state.update(last_fail=now, last_error=error)
+        log(f"✗ 备份失败: {error}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if os.path.exists(out + ".part"):
+            os.remove(out + ".part")
+        state["last_run"] = now
+        write_private(BACKUP_STATE, json.dumps(state, ensure_ascii=False, indent=1) + "\n")
+    alert(conf, "backup:fail", bool(error), "🔴 sbm 备份失败", f"{error}\n本机已有的备份不受影响，请尽快处理。",
+          recover=("🟢 sbm 备份恢复正常", f"最新备份 {state.get('last_file')}。"), repeat=24 * 3600, log=log)
+    if not error:
+        off = state.get("offsite", {})
+        alert(conf, "backup:offsite", not off.get("ok"), "🟠 sbm 异地备份失败",
+              f"本机备份成功，但复制到境外节点失败：{off.get('error')}", repeat=24 * 3600,
+              recover=("🟢 sbm 异地备份恢复正常", f"已保存到 {off.get('node')}。"), log=log)
+    if error:
+        raise SbmError(error)
+    return state
+
+
+def backup_list():
+    files = []
+    if os.path.isdir(BACKUP_DIR):
+        for f in sorted((f for f in os.listdir(BACKUP_DIR) if BACKUP_RE.match(f)), reverse=True):
+            p = os.path.join(BACKUP_DIR, f)
+            files.append({"name": f, "size": os.path.getsize(p), "mtime": int(os.path.getmtime(p))})
+    return {"files": files, "state": load(BACKUP_STATE, {}), "keep": BACKUP_KEEP, "dir": BACKUP_DIR,
+            "offsite_dir": OFFSITE_DIR}
+
+
+# ---------- 健康检查与每周简报 ----------
+# 每 5 分钟（sbm-health.timer）检查一遍，异常时通过 alert() 告警（自带去重、提醒间隔和恢复通知）。
+
+CERT_WARN_DAYS = 15
+LOGIN_FAIL_LIMIT = 10      # 同一 IP 15 分钟内登录失败次数
+DISK_WARN_PCT = 85
+
+
+def cert_days_file(path):
+    r = subprocess.run(["openssl", "x509", "-enddate", "-noout", "-in", path], capture_output=True, text=True)
+    m = re.search(r"notAfter=(.+)", r.stdout)
+    return int((ssl.cert_time_to_seconds(m.group(1).strip()) - time.time()) // 86400) if m else None
+
+
+def _login_failures(minutes=15):
+    """统计最近一段时间控制台（/admin）登录失败（401）的来源 IP。"""
+    counts = {}
+    since = datetime.now().astimezone() - timedelta(minutes=minutes)
+    try:
+        with open("/var/log/nginx/access.log", "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 4 * 1024 * 1024))  # 只看最后 4MB
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return counts
+    for line in lines:
+        m = re.match(r'(\S+) \S+ \S+ \[([^\]]+)\] "\S+ (/admin\S*) [^"]*" 401 ', line)
+        if not m:
+            continue
+        try:
+            if datetime.strptime(m.group(2), "%d/%b/%Y:%H:%M:%S %z") >= since:
+                counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+        except ValueError:
+            pass
+    return counts
+
+
+def health_run(conf, log=print):
+    """跑一遍健康检查并按需告警，返回 [(检查项, 是否正常, 说明)] 供显示。"""
+    out = []
+
+    def check(key, bad, item, msg, title, text, recover=None, need=1, repeat=6 * 3600):
+        out.append((item, not bad, msg))
+        alert(conf, key, bad, title, text, recover=recover, need=need, repeat=repeat, log=log)
+
+    # 1. 证书：订阅域名读本机文件；节点读最近一次探测时节点实际出示的证书
+    d = cert_days_file(f"/etc/letsencrypt/live/{conf['sub_domain']}/fullchain.pem")
+    if d is not None:
+        check("cert:sub", d < CERT_WARN_DAYS, f"证书 {conf['sub_domain']}", f"剩 {d} 天",
+              f"🟠 sbm 证书即将到期：{conf['sub_domain']}", f"只剩 {d} 天，自动续期可能失败，请检查 certbot 与 Cloudflare Token。",
+              recover=("🟢 sbm 证书已续期", f"{conf['sub_domain']} 证书已更新。"), repeat=24 * 3600)
+    probe = probe_summary(conf)
+    for name, r in probe["nodes"].items():
+        if r.get("cert_days") is not None:
+            check(f"cert:{name}", r["cert_days"] < CERT_WARN_DAYS, f"证书 {name}", f"剩 {r['cert_days']} 天",
+                  f"🟠 sbm 节点证书即将到期：{name}",
+                  f"节点 {name} 的证书只剩 {r['cert_days']} 天。sbm 部署的节点由订阅服务器续期；「接入」的节点请检查节点上的 certbot。",
+                  recover=("🟢 sbm 节点证书已续期", f"{name} 证书已更新。"), repeat=24 * 3600)
+
+    # 2. 节点上的 sing-box 服务与磁盘（连不上的节点由可达性探测负责告警）
+    def node_check(node):
+        return node, ssh(node, "systemctl is-active sing-box; df -P / | awk 'NR==2{print $5}'")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for node, r in pool.map(node_check, conf["nodes"]):
+            if r.returncode not in (0, 3):  # is-active 不在运行时返回 3
+                out.append((f"节点 {node['name']}", None, "SSH 连不上（见国内可达性）"))
+                continue
+            lines = r.stdout.split()
+            svc = lines[0] if lines else "unknown"
+            pct = int(lines[1].rstrip("%")) if len(lines) > 1 and lines[1].rstrip("%").isdigit() else 0
+            check(f"svc:{node['name']}", svc != "active", f"sing-box {node['name']}", svc,
+                  f"🔴 sbm 节点 sing-box 未运行：{node['name']}", f"服务状态 {svc}。在节点上运行 journalctl -u sing-box -n 50 查看原因。",
+                  recover=("🟢 sbm 节点 sing-box 已恢复", f"{node['name']} 的 sing-box 重新运行。"), need=2)
+            check(f"disk:{node['name']}", pct >= 90, f"磁盘 {node['name']}", f"{pct}%",
+                  f"🟠 sbm 节点磁盘快满：{node['name']}", f"已用 {pct}%，日志过多可能导致 sing-box 异常。",
+                  repeat=24 * 3600)
+
+    # 3. 账号推送失败的节点
+    dirty = load_creds()["dirty"]
+    check("dirty", bool(dirty), "账号同步", "、".join(dirty) + " 待同步" if dirty else "正常",
+          "🟠 sbm 节点账号未同步", f"推送账号到 {'、'.join(dirty)} 失败，部分新用户可能连不上这些节点。可在控制台点「同步节点」重试。",
+          recover=("🟢 sbm 节点账号已同步", "所有节点的账号已一致。"))
+
+    # 4. 流量采集
+    ts = traffic_summary(conf)
+    if ts["enabled"] and ts["collected"]:
+        age = (datetime.now() - datetime.strptime(ts["collected"], "%Y-%m-%d %H:%M")).total_seconds() / 60
+        check("traffic:stale", age > 20, "流量采集", f"{int(age)} 分钟前",
+              "🟠 sbm 流量采集停止", f"已经 {int(age)} 分钟没有采集，检查 systemctl status sbm-traffic.timer。",
+              recover=("🟢 sbm 流量采集已恢复", "流量统计恢复正常。"))
+        for name, st in ts["status"].items():
+            check(f"traffic:{name}", not st["ok"], f"流量采集 {name}", st["error"] or "正常",
+                  f"🟠 sbm 节点流量采集失败：{name}", st["error"], need=3,
+                  recover=("🟢 sbm 节点流量采集已恢复", f"{name} 恢复正常。"))
+
+    # 5. 控制台登录失败（疑似暴力破解）
+    fails = _login_failures()
+    for ip, n in fails.items():
+        check(f"login:{ip}", n >= LOGIN_FAIL_LIMIT, f"登录失败 {ip}", f"15 分钟 {n} 次",
+              "🔴 sbm 控制台疑似被暴力破解", f"{ip} 在 15 分钟内登录失败 {n} 次。若不是你本人，建议修改管理员密码，或在 Nginx 里限制来源 IP。")
+    with alerts_locked():
+        stale = [k for k in load(ALERTS, {}).get("active", {}) if k.startswith("login:") and k[6:] not in fails]
+    for k in stale:
+        alert(conf, k, False, "", "", log=log)
+    if not fails:
+        out.append(("控制台登录", True, "15 分钟内无失败"))
+
+    # 6. 订阅服务器磁盘与备份
+    du = shutil.disk_usage("/")
+    pct = int(du.used * 100 / du.total)
+    check("disk:mgmt", pct >= DISK_WARN_PCT, "磁盘 订阅服务器", f"{pct}%",
+          "🟠 sbm 订阅服务器磁盘快满", f"已用 {pct}%，请清理（日志、旧备份）。", repeat=24 * 3600)
+    bs = load(BACKUP_STATE, {})
+    if bs.get("last_ok"):
+        hours = (time.time() - bs["last_ok"]) / 3600
+        check("backup:stale", hours > 36, "最近备份", f"{int(hours)} 小时前",
+              "🟠 sbm 已超过 36 小时没有成功备份", f"上次成功备份在 {int(hours)} 小时前，检查 systemctl status sbm-backup.timer。",
+              recover=("🟢 sbm 备份恢复正常", "已有新的备份。"), repeat=24 * 3600)
+    return out
+
+
+def report_text(conf, days=7):
+    """每周简报：用户、流量、节点可用率、证书、备份、告警。"""
+    now = datetime.now()
+    start = now - timedelta(days=days)
+    users = load_users()
+    lines = [f"统计区间：{start:%m-%d} ~ {now:%m-%d}"]
+    new = [u["name"] for u in users if u["created"] >= f"{start:%Y-%m-%d %H:%M}"]
+    lines.append(f"用户：共 {len(users)} 个，启用 {sum(u['enabled'] for u in users)} 个"
+                 + (f"，本周新增 {len(new)} 个（{'、'.join(new)}）" if new else ""))
+    if os.path.exists(TRAFFIC_DB):
+        con = traffic_db()
+        rows = con.execute("SELECT uid, SUM(up + down) FROM usage WHERE day >= ? GROUP BY uid ORDER BY 2 DESC",
+                           (f"{start:%Y-%m-%d}",)).fetchall()
+        con.close()
+        names = {u["id"]: u["name"] for u in users}
+        total = sum(r[1] for r in rows)
+        top = "、".join(f"{names.get(uid, '已删除用户')} {fmt_bytes(b)}" for uid, b in rows[:5])
+        lines.append(f"流量：合计 {fmt_bytes(total)}" + (f"；最多：{top}" if top else ""))
+    if os.path.exists(PROBE_DB):
+        con = probe_db()
+        lines.append("节点（国内可用率 / 平均代理延迟）：")
+        for n in conf["nodes"]:
+            total, good, avg = con.execute(
+                "SELECT COUNT(*), SUM(status='ok'), AVG(CASE WHEN status='ok' THEN proxy_ms END) FROM probe WHERE node=? AND ts>=?",
+                (n["name"], int(start.timestamp()))).fetchone()
+            if total:
+                lines.append(f"  · {n['name']}：{100 * (good or 0) / total:.1f}% / {int(avg) if avg else '—'} ms")
+        con.close()
+    certs = []
+    d = cert_days_file(f"/etc/letsencrypt/live/{conf['sub_domain']}/fullchain.pem")
+    if d is not None:
+        certs.append((d, conf["sub_domain"]))
+    certs += [(r["cert_days"], k) for k, r in probe_summary(conf)["nodes"].items() if r.get("cert_days") is not None]
+    if certs:
+        d, name = min(certs)
+        lines.append(f"证书：最早到期的是 {name}，还剩 {d} 天")
+    bs = load(BACKUP_STATE, {})
+    if bs.get("last_ok"):
+        off = bs.get("offsite", {})
+        lines.append(f"备份：最近一次 {datetime.fromtimestamp(bs['last_ok']):%m-%d %H:%M}，"
+                     + (f"异地副本在 {off.get('node')}" if off.get("ok") else "⚠ 异地副本失败"))
+    creds = load_creds()
+    lines.append(f"账号池：{len(creds['spares'])}/{pool_size(conf)}")
+    hist = [h for h in load(ALERTS, {}).get("history", []) if h["ts"] >= start.timestamp()
+            and not h["title"].startswith(("📊", "🔔"))]
+    lines.append(f"本周告警：{len(hist)} 条" + (f"（最近一条：{hist[-1]['title']}）" if hist else ""))
+    return "\n".join(lines)
 
 
 # ---------- 命令 ----------
@@ -2189,8 +2550,50 @@ def cmd_probe(args, conf):
             print(f"      · {d}")
 
 
+def cmd_backup(args, conf):
+    if args.action == "run":
+        try:
+            backup_run(conf)
+        except SbmError as e:
+            die(str(e))
+        return
+    if args.action == "key":
+        print("备份解密密钥（请保存到密码管理器等安全的地方；订阅服务器丢失时，用它解密境外节点上的异地副本）：\n")
+        print(backup_key())
+        return
+    info = backup_list()
+    st = info["state"]
+    off = st.get("offsite", {})
+    print(f"本机备份（{info['dir']}，保留 {info['keep']} 份）：")
+    for f in info["files"]:
+        print(f"  {f['name']}  {fmt_bytes(f['size'])}")
+    if not info["files"]:
+        print("  （还没有）")
+    if off:
+        print(f"\n异地副本：{'成功，' + off['node'] + ':' + info['offsite_dir'] + '/' + off['file'] if off.get('ok') else '失败 ' + off.get('error', '')}")
+    if st.get("last_error"):
+        print(f"最近一次失败：{datetime.fromtimestamp(st['last_fail']):%m-%d %H:%M} {st['last_error']}")
+
+
+def cmd_health(args, conf):
+    for item, ok, msg in health_run(conf, log=lambda *_: None):
+        mark = "—" if ok is None else ("✓" if ok else "✗")
+        print(f"  {mark} {item:<28}{msg}")
+
+
+def cmd_report(args, conf):
+    text = report_text(conf)
+    print(text)
+    if args.action == "send":
+        results = notify_all(conf, "📊 sbm 每周简报", text)
+        print("\n" + ("；".join(f"{n}: {'已发送' if not e else '失败 ' + e}" for n, e in results) or "没有启用的通知渠道"))
+
+
 def cmd_notify(args, conf):
     data = load_notify()
+    if args.action == "send":  # 供 systemd OnFailure 等脚本调用
+        notify_all(conf, args.title or "sbm 通知", args.text or "")
+        return
     if args.action == "list":
         if not data["channels"]:
             print("还没有通知渠道，请在控制台「通知」里添加")
@@ -2328,7 +2731,15 @@ def main():
     pp.add_argument("action", nargs="?", choices=["show", "run"], default="show")
     pp.add_argument("-v", "--verbose", action="store_true", help="run: 显示每个节点的检测过程")
     pf = sub.add_parser("notify", help="告警通知：sbm notify list 查看渠道；sbm notify test 发送测试消息")
-    pf.add_argument("action", choices=["list", "test"])
+    pf.add_argument("action", choices=["list", "test", "send"])
+    pf.add_argument("--title", help="send: 标题")
+    pf.add_argument("--text", help="send: 正文")
+    pb = sub.add_parser("backup", help="备份：sbm backup 查看；sbm backup run 立即备份；sbm backup key 显示异地副本的解密密钥")
+    pb.add_argument("action", nargs="?", choices=["list", "run", "key"], default="list")
+    ph = sub.add_parser("health", help="健康检查：证书、节点服务与磁盘、账号同步、流量采集、登录失败、备份（定时器每 5 分钟运行）")
+    ph.add_argument("action", nargs="?", choices=["run"], default="run")
+    pr = sub.add_parser("report", help="每周简报：sbm report 预览；sbm report send 发送到通知渠道")
+    pr.add_argument("action", nargs="?", choices=["show", "send"], default="show")
     pt = sub.add_parser("traffic", help="流量统计：sbm traffic 查看本月；sbm traffic collect 采集一次（定时器使用）")
     pt.add_argument("action", nargs="?", choices=["show", "collect"], default="show")
     pt.add_argument("-v", "--verbose", action="store_true", help="collect: 显示每个节点的采集结果")
@@ -2377,6 +2788,12 @@ def main():
         cmd_probe(args, conf)
     elif args.cmd == "notify":
         cmd_notify(args, conf)
+    elif args.cmd == "backup":
+        cmd_backup(args, conf)
+    elif args.cmd == "health":
+        cmd_health(args, conf)
+    elif args.cmd == "report":
+        cmd_report(args, conf)
     elif args.cmd == "traffic":
         cmd_traffic(args, conf)
     elif args.cmd == "build":

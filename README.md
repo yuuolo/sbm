@@ -15,6 +15,8 @@
   - sing-box 版本查看与批量升级（失败自动回滚）
   - 节点状态：运行状态、CPU 负载、内存、系统版本
 - **国内可达性检测与告警**：订阅服务器每 5 分钟从国内检测各节点（国内 DNS、TCP/TLS 握手、经节点真实代理一次，失败时由其他节点从境外对照），区分「疑似被封 / 节点故障 / DNS 污染 / 代理不通」；异常时通过企业微信、飞书、钉钉、Bark、Telegram 告警
+- **告警与每周简报**：证书快到期、节点 sing-box 停止、账号同步失败、流量采集停止、控制台被暴力破解、磁盘快满、备份失败、定时任务失败（systemd OnFailure）；去重、定期提醒、恢复通知；每周一发送简报；没有渠道时也记录在控制台
+- **自动异地备份**：每天备份配置、用户、证书与 Token、统计数据，本机保留 14 份，AES-256 加密后复制到境外节点；控制台可下载、查看恢复密钥
 - **流量统计**：按用户、按天、按节点统计，控制台查看每日图表；客户端可显示本月已用流量
 - **域名管理**：多个主域名，每个配独立的 Cloudflare Token，部署节点时选择
 - **证书**：订阅服务器统一申请和续期，续期后自动推送到节点
@@ -43,11 +45,11 @@
 | `web/manual.html` | 管理手册（`{{...}}` 占位符由后端按配置填入） | `/opt/sbm-web/` |
 | `web/guide.tpl.html` | 用户使用说明页模板 | `/usr/local/share/sbm/` |
 | `nginx/sub.conf.tpl` | Nginx 站点模板（订阅、使用说明页、控制台） | `/etc/nginx/sites-available/sub.conf` |
-| `systemd/` | 控制台服务、每日维护（04:00）、流量采集与国内可达性检测（各每 5 分钟） | `/etc/systemd/system/` |
+| `systemd/` | 控制台服务；定时任务：备份（03:30）、维护（04:00）、流量采集 / 可达性检测 / 健康检查（各每 5 分钟）、周报（周一 09:00）；任务失败告警 | `/etc/systemd/system/` |
 | `contrib/certbot-restart-sing-box.sh` | 给「接入」节点用的 certbot 续期钩子 | 节点的 `/etc/letsencrypt/renewal-hooks/deploy/` |
 | `install.sh` | 订阅服务器安装 / 更新脚本 | — |
 
-运行时数据（不在仓库里）：`/etc/sbm/`（配置、用户、账号池、流量库）、`/etc/letsencrypt/`（证书与 Token）、`/root/.ssh/sbm_node`（管理节点的私钥）。
+运行时数据（不在仓库里）：`/etc/sbm/`（配置、用户、账号池、流量与检测库、通知渠道、备份密钥）、`/var/backups/sbm/`（本机备份）、`/etc/letsencrypt/`（证书与 Token）、`/root/.ssh/sbm_node`（管理节点的私钥）。
 
 ## 部署
 
@@ -97,6 +99,9 @@ sudo sbm domain list | add <域名> | check | token | default | del
 sudo sbm traffic [collect]
 sudo sbm probe [run]      # 国内可达性
 sudo sbm notify list | test
+sudo sbm health           # 健康检查
+sudo sbm report [send]    # 每周简报
+sudo sbm backup [run|key] # 备份
 sudo sbm pool          # 账号池与待清理账号
 sudo sbm sync          # 立即执行每日维护
 sudo sbm --help

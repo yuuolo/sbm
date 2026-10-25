@@ -1,0 +1,6 @@
+[Unit]
+Description=sbm 定时任务失败告警（%i）
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sbm notify send --title "🔴 sbm 定时任务失败：%i" --text "%i 这次运行失败了。在订阅服务器上运行 journalctl -u %i -n 50 查看原因。"

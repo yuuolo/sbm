@@ -1,0 +1,10 @@
+[Unit]
+Description=sbm 每日备份：本机保留 14 份，加密后复制到境外节点
+After=network-online.target
+Wants=network-online.target
+OnFailure=sbm-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sbm backup run
+TimeoutStartSec=600

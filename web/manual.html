@@ -99,6 +99,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <a class="sub" href="#status">状态卡片怎么看</a>
   <a class="sub" href="#upgrade">升级 sing-box</a>
   <a class="sub" href="#probe">国内可达性与告警</a>
+  <a class="sub" href="#alerts">告警项目一览</a>
   <a href="#certs">4. 证书与域名</a>
   <a class="sub" href="#domains">多个域名与 Token</a>
   <a href="#cli">5. 命令行参考</a>
@@ -159,7 +160,8 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 <ul>
   <li>新增用户：从账号池取一个，节点不变。</li>
   <li>停用/删除：账号先留在节点上（「待清理」），订阅立即失效。</li>
-  <li>每天 <b>04:00（北京时间）</b> 自动维护：清理待清理账号、把账号池补满 20 个，并推送到节点。<b>只有账号有变化的节点会重启</b>，没变化的不动。</li>
+  <li>每天 <b>04:00（北京时间）</b> 自动维护：清理待清理账号，并推送到节点。<b>只有账号有变化的节点会重启</b>，没变化的不动。</li>
+  <li><b>低水位补充：</b>备用账号少于一半（10 个）时才一次补满 20 个，而不是用掉一个补一个。这样平时新增用户的当晚节点不会重启，大约每新增 10 人才因补充重启一次。</li>
 </ul>
 <p>账号池用完（一天内新增超过 20 人）时，新增用户会提示需要重启节点，同时把账号池补满。想马上清理，可以点控制台顶部的 <b>同步节点</b>，效果和夜间维护一样。</p>
 </section>
@@ -314,8 +316,25 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <tr><td>DNS 污染</td><td>TLS 正常但国内 DNS 解析结果不对：可以给节点换一个域名（域名管理里换主域名或前缀重新部署）</td></tr>
   <tr><td>代理不通</td><td>TLS 正常但代理请求失败：可能协议被识别阻断，或节点上 sing-box 配置异常；先看节点卡片是否「运行中」</td></tr>
 </table></div>
-<p><b>告警：</b>点控制台右上角 <b>通知</b> 添加渠道（企业微信、飞书、钉钉群机器人，Bark，Telegram），每个渠道可以单独测试、停用。某节点<b>连续 2 次</b>检测异常时发告警，异常持续时每 6 小时提醒一次，恢复时再通知。Telegram 从国内连不上，消息会经境外节点转发；钉钉若用「自定义关键词」安全设置，关键词填 <code>sbm</code>。Webhook 和 Token 保存在 <code>/etc/sbm/notify.json</code>（仅 root 可读），控制台只显示打码后的信息。</p>
+<p><b>告警：</b>点控制台右上角 <b>通知</b> 添加渠道（企业微信、飞书、钉钉群机器人，Bark，Telegram），每个渠道可以单独测试、停用。某节点<b>连续 2 次</b>检测异常时发告警，异常持续时每 6 小时提醒一次，恢复时再通知。其他告警项目见下一节「告警项目一览」。Telegram 从国内连不上，消息会经境外节点转发；钉钉若用「自定义关键词」安全设置，关键词填 <code>sbm</code>。Webhook 和 Token 保存在 <code>/etc/sbm/notify.json</code>（仅 root 可读），控制台只显示打码后的信息。</p>
 <p><b>其他说明：</b>代理检测使用从账号池取出的一个专用账号（它本来就在所有节点上，不需要重启节点），产生的流量很小且不计入任何用户；订阅服务器上做检测用的 sing-box 从节点复制而来，放在 <code>/etc/sbm/bin/</code>。检测记录保留 14 天。</p>
+
+<h3 id="alerts">告警项目一览</h3>
+<p>所有告警都发到「通知」里启用的渠道；<b>没有设置渠道时也会记在「通知 → 告警记录」里</b>。同一个问题只告警一次，持续存在时按间隔提醒，恢复时再发一条恢复通知。右上角「通知」的角标变红并显示数字，表示有未恢复的异常。</p>
+<div class="table-wrap"><table>
+  <tr><th>告警</th><th>触发条件</th><th>持续时提醒</th><th>检查频率</th></tr>
+  <tr><td>节点国内不可达</td><td>连续 2 次检测异常（被封、故障、DNS 污染、代理不通）</td><td>6 小时</td><td>5 分钟</td></tr>
+  <tr><td>证书即将到期</td><td>订阅域名或任一节点的证书剩不到 15 天（节点按它实际出示的证书算，包括「接入」节点）</td><td>24 小时</td><td>5 分钟</td></tr>
+  <tr><td>节点 sing-box 未运行</td><td>连续 2 次检查服务不是 active</td><td>6 小时</td><td>5 分钟</td></tr>
+  <tr><td>磁盘快满</td><td>节点 ≥ 90%、订阅服务器 ≥ 85%</td><td>24 小时</td><td>5 分钟</td></tr>
+  <tr><td>节点账号未同步</td><td>推送账号到某节点失败（「待同步」）</td><td>6 小时</td><td>5 分钟</td></tr>
+  <tr><td>流量采集停止 / 失败</td><td>超过 20 分钟没有采集；或某节点连续 3 次采集失败</td><td>6 小时</td><td>5 分钟</td></tr>
+  <tr><td>控制台疑似被暴力破解</td><td>同一 IP 15 分钟内登录失败 10 次</td><td>6 小时</td><td>5 分钟</td></tr>
+  <tr><td>备份失败 / 异地复制失败 / 超过 36 小时没有备份</td><td>见第 7 节</td><td>24 小时</td><td>每次备份、每 5 分钟</td></tr>
+  <tr><td>定时任务失败</td><td>每日维护、流量采集、可达性检测、健康检查、备份、简报任一次运行失败（systemd OnFailure）</td><td>每次失败</td><td>—</td></tr>
+  <tr><td>每周简报</td><td>每周一 09:00：用户、流量、节点可用率、证书、备份、本周告警</td><td>—</td><td>每周</td></tr>
+</table></div>
+<p>「通知」里的「健康检查」页可以立即跑一遍所有检查，「每周简报」页可以预览并立即发送一份。</p>
 </section>
 
 <section id="certs">
@@ -359,6 +378,9 @@ sudo sbm probe                             <span class="c"># 各节点国内可�
 sudo sbm probe run -v                      <span class="c"># 立即检测一次并显示过程</span>
 sudo sbm notify list                       <span class="c"># 已设置的通知渠道（打码显示）</span>
 sudo sbm notify test                       <span class="c"># 向所有启用的渠道发测试消息</span>
+sudo sbm health                            <span class="c"># 立即跑一遍健康检查</span>
+sudo sbm report [send]                     <span class="c"># 预览 / 发送每周简报</span>
+sudo sbm backup [run|key]                  <span class="c"># 查看备份 / 立即备份 / 显示恢复密钥</span>
 
 <span class="c"># 流量统计</span>
 sudo sbm traffic                           <span class="c"># 本月各用户流量</span>
@@ -420,17 +442,14 @@ sudo sbm domain del example.com            <span class="c"># 删除未使用的�
 
 <section id="backup">
 <h2>7. 备份与恢复</h2>
-<p>重要数据都在订阅服务器上，节点可以随时重新部署。建议每次较大改动后备份一次：</p>
-<pre><code>sudo tar czf ~/sbm-backup-$(date +%F).tar.gz \
-  /etc/sbm /etc/letsencrypt /root/.ssh/sbm_node /root/.ssh/sbm_node.pub \
-  /usr/local/bin/sbm /opt/sbm-web /etc/nginx/sites-available/sub.conf \
-  /etc/nginx/sbm-admin.htpasswd /etc/systemd/system/sbm-web.service \
-  /etc/systemd/system/sbm-maintain.service /etc/systemd/system/sbm-maintain.timer \
-  /etc/systemd/system/sbm-traffic.service /etc/systemd/system/sbm-traffic.timer \
-  /etc/systemd/system/sbm-probe.service /etc/systemd/system/sbm-probe.timer \
-  /usr/local/share/sbm</code></pre>
-<p>然后在你自己的电脑上下载保存（PowerShell）：</p>
-<pre><code>scp ubuntu@{{MANAGER_IP}}:~/sbm-backup-*.tar.gz .</code></pre>
+<p>重要数据都在订阅服务器上，节点可以随时重新部署。系统<b>每天 03:30 自动备份</b>（<code>sbm-backup.timer</code>），控制台右上角 <b>备份</b> 可以查看、立即备份和下载。</p>
+<ul>
+  <li><b>本机：</b><code>/var/backups/sbm/</code>，保留最近 14 份，仅 root 可读。</li>
+  <li><b>异地：</b>每次备份后用 AES-256 加密，复制到第一台能连上的境外节点的 <code>/root/sbm-backups/</code>，同样保留 14 份。订阅服务器被停机或封号时，从这里恢复。</li>
+  <li><b>恢复密钥：</b>异地副本必须用 <code>/etc/sbm/backup.key</code> 才能解密。<b>请在控制台「备份 → 恢复密钥」复制出来，存到密码管理器等订阅服务器以外的地方</b>；订阅服务器整个丢失时，没有它异地副本打不开。</li>
+  <li><b>告警：</b>备份失败、异地复制失败、超过 36 小时没有成功备份，都会告警。</li>
+</ul>
+<p>备份包含：</p>
 <div class="table-wrap"><table>
   <tr><th>文件</th><th>内容</th></tr>
   <tr><td><code>/etc/sbm/users.json</code></td><td>用户、密码、订阅令牌（最重要）</td></tr>
@@ -441,8 +460,18 @@ sudo sbm domain del example.com            <span class="c"># 删除未使用的�
   <tr><td><code>/root/.ssh/sbm_node</code></td><td>管理节点用的 SSH 私钥</td></tr>
   <tr><td><code>/etc/letsencrypt/</code></td><td>证书和 Cloudflare Token</td></tr>
 </table></div>
-<div class="warn">备份文件里有所有用户的密码、SSH 私钥和 Cloudflare Token，请妥善保管，不要上传到网盘公开目录或发给他人。</div>
-<p>恢复：在新服务器上解压到根目录（<code>sudo tar xzf 备份.tar.gz -C /</code>），安装 <code>nginx certbot python3-certbot-dns-cloudflare python3-qrcode jq</code>，启用 Nginx 站点和 sbm-web / sbm-maintain.timer 服务，再把 <code>{{SUB_DOMAIN}}</code> 解析到新 IP。各节点的授权限制了只能从 {{MANAGER_IP}} 登录，换了订阅服务器 IP 需要在每个节点上重新运行授权命令。</p>
+<div class="warn">从控制台下载的备份<b>没有加密</b>，里面有所有用户的密码、SSH 私钥和 Cloudflare Token，请妥善保管，不要上传到网盘公开目录或发给他人。</div>
+<h3>恢复到一台新服务器</h3>
+<ol>
+  <li>拿到备份：从控制台下载的 <code>.tar.gz</code>；或从境外节点取回加密副本后解密：
+<pre><code>scp root@节点IP:/root/sbm-backups/sbm-日期.tar.gz.enc .
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in sbm-日期.tar.gz.enc -out sbm.tar.gz -pass pass:你保存的恢复密钥</code></pre></li>
+  <li>在新服务器上解压到根目录：<code>sudo tar xzf sbm.tar.gz -C /</code></li>
+  <li>从仓库安装程序并启用服务：<code>git clone https://github.com/yuuolo/sbm.git &amp;&amp; cd sbm &amp;&amp; sudo ./install.sh --upgrade</code>（配置、证书、密码都已从备份恢复，只装程序和依赖）</li>
+  <li>把 <code>{{SUB_DOMAIN}}</code> 解析到新服务器 IP，新服务器安全组放行 TCP {{SUB_PORT}}。</li>
+  <li>各节点的授权只允许从 {{MANAGER_IP}} 登录：新服务器 IP 不同时，在 <code>/etc/sbm/config.json</code> 里改 <code>manager_ip</code>，再在每个节点上把 <code>/root/.ssh/authorized_keys</code> 中 sbm 那一行的 <code>from="…"</code> 改成新 IP。</li>
+</ol>
+<p>命令行：<code>sudo sbm backup</code> 查看；<code>sudo sbm backup run</code> 立即备份；<code>sudo sbm backup key</code> 显示恢复密钥。</p>
 </section>
 
 <section id="security">

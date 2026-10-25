@@ -52,6 +52,8 @@ def state():
     return {
         "probe": sbm.probe_summary(conf),
         "notify_count": sum(1 for c in sbm.load_notify()["channels"] if c.get("enabled", True)),
+        "alerts_active": len(sbm.load(sbm.ALERTS, {}).get("active", {})),
+        "backup": {k: v for k, v in sbm.load(sbm.BACKUP_STATE, {}).items() if k in ("last_ok", "last_error", "last_fail", "offsite")},
         "traffic": {
             "enabled": traffic["enabled"],
             "collected": traffic["collected"],
@@ -337,6 +339,35 @@ def notify_test(cid):
     return {"ok": True}
 
 
+# ---------- 备份、健康检查、告警记录、简报 ----------
+
+def backup_now():
+    lines = []
+    try:
+        sbm.backup_run(sbm.load(sbm.CONF), log=lines.append)
+    except sbm.SbmError as e:
+        raise ApiError(500, "\n".join(lines) or str(e))
+    return dict(sbm.backup_list(), log="\n".join(lines))
+
+
+def alerts_info():
+    st = sbm.load(sbm.ALERTS, {})
+    active = [{"key": k, "title": v.get("title", k), "since": v["since"]} for k, v in st.get("active", {}).items()]
+    return {"active": active, "history": list(reversed(st.get("history", [])))[:50]}
+
+
+def health_now():
+    items = sbm.health_run(sbm.load(sbm.CONF), log=lambda *_: None)
+    return {"items": [{"item": i, "ok": ok, "msg": m} for i, ok, m in items], **alerts_info()}
+
+
+def report_send():
+    conf = sbm.load(sbm.CONF)
+    text = sbm.report_text(conf)
+    results = sbm.notify_all(conf, "📊 sbm 每周简报", text, log=lambda *_: None)
+    return {"text": text, "results": [{"name": n, "error": e} for n, e in results]}
+
+
 def user_config(name):
     """订阅配置详情：结构化概览 + 实际下发给客户端的三种格式原文（含密码，仅管理员可见）。"""
     conf = sbm.load(sbm.CONF)
@@ -446,6 +477,18 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, status, obj):
         self.send(status, json.dumps(obj, ensure_ascii=False))
 
+    def send_download(self, data, filename, ctype):
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def handle_api(self, fn):
         try:
             self.send_json(200, fn())
@@ -494,6 +537,19 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(lambda: user_traffic(unquote(t.group(1))))
         elif url.path == "/api/notify":
             self.handle_api(notify_list)
+        elif url.path == "/api/backup":
+            self.handle_api(sbm.backup_list)
+        elif bd := re.fullmatch(r"/api/backup/download/(sbm-\d{8}-\d{6}\.tar\.gz)", url.path):
+            path = os.path.join(sbm.BACKUP_DIR, bd.group(1))
+            if not os.path.isfile(path):
+                self.send_json(404, {"ok": False, "error": "备份不存在"})
+            else:
+                with open(path, "rb") as f:
+                    self.send_download(f.read(), bd.group(1), "application/gzip")
+        elif url.path == "/api/alerts":
+            self.handle_api(alerts_info)
+        elif url.path == "/api/report":
+            self.handle_api(lambda: {"text": sbm.report_text(sbm.load(sbm.CONF))})
         elif p := re.fullmatch(r"/api/probe/([^/]+)", url.path):
             self.handle_api(lambda: {"history": sbm.probe_history(unquote(p.group(1)))})
         elif c := re.fullmatch(r"/api/users/([^/]+)/config", url.path):
@@ -530,6 +586,11 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(lambda: attach_job(self.read_body()))
         elif path == "/api/nodes/upgrade":
             self.handle_api(lambda: upgrade_job(self.read_body()))
+        elif path in ("/api/backup/run", "/api/backup/key", "/api/health/run", "/api/report/send"):
+            fn = {"/api/backup/run": backup_now, "/api/health/run": health_now, "/api/report/send": report_send,
+                  # 密钥只通过带防 CSRF 请求头的 POST 返回，不会被普通链接或缓存带出
+                  "/api/backup/key": lambda: {"key": sbm.backup_key()}}[path]
+            self.handle_api(lambda: (self.read_body(), fn())[1])
         elif path == "/api/probe/run":
             self.handle_api(lambda: (self.read_body(), probe_now())[1])
         elif path == "/api/notify":

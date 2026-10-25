@@ -2,6 +2,7 @@
 Description=sbm 每日维护：清理已删除/停用用户的节点账号，补满账号池
 After=network-online.target
 Wants=network-online.target
+OnFailure=sbm-alert@%n.service
 
 [Service]
 Type=oneshot

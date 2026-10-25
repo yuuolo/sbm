@@ -1,0 +1,9 @@
+[Unit]
+Description=每天 03:30 备份 sbm（在 04:00 维护之前）
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

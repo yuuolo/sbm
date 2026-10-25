@@ -13,7 +13,7 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/etc/sbm /var/www/sub /root/.ssh /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt
+ReadWritePaths=/etc/sbm /var/www/sub /root/.ssh /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt -/var/backups/sbm
 ProtectHome=read-only
 
 [Install]

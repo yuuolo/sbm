@@ -1,0 +1,10 @@
+[Unit]
+Description=sbm 健康检查：证书、节点服务与磁盘、账号同步、流量采集、登录失败、备份
+After=network-online.target
+Wants=network-online.target
+OnFailure=sbm-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sbm health run
+TimeoutStartSec=240
