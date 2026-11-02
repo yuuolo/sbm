@@ -90,7 +90,7 @@ button, input { font: inherit; color: inherit; }
 .title h1 { font-size: 19px; margin: 0; letter-spacing: .2px; }
 .title p { margin: 0; color: var(--muted); font-size: 12.5px; }
 .top .spacer { flex: 1; }
-.top-actions { display: flex; gap: 8px; }
+.top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* 按钮 */
 .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); padding: 7px 13px; border-radius: 9px; cursor: pointer; transition: background .15s, border-color .15s, transform .05s; white-space: nowrap; }
@@ -349,6 +349,34 @@ tbody tr:hover td { background: var(--surface-2); }
 .preview-line { font-size: 12.5px; color: var(--muted); margin-top: -6px; margin-bottom: 12px; }
 .preview-line b { color: var(--text); font-weight: 600; }
 
+/* 配置管理 */
+.table-scroll { overflow-x: auto; }
+.table-scroll .pill { white-space: nowrap; }
+.sel { border: 1px solid var(--border); background: var(--surface-2); border-radius: 9px; padding: 7px 10px; outline: none; font: inherit; color: inherit; min-width: 0; max-width: 100%; }
+.sel:focus { border-color: var(--accent); }
+.sel.sm { padding: 4px 8px; font-size: 13px; border-radius: 8px; max-width: 130px; }
+.prf { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin-bottom: 8px; background: var(--surface-2); }
+.prf-main { flex: 1; min-width: 220px; }
+.radio-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+.radio-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13.5px; }
+.opt-row { display: flex; align-items: center; gap: 10px; font-size: 13.5px; padding-top: 24px; }
+.svc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 20px; }
+.svc { display: flex; align-items: center; gap: 8px; }
+.svc label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 13.5px; }
+.svc .sel { width: 48%; flex: none; padding: 4px 8px; font-size: 13px; border-radius: 8px; }
+.svc .sel:disabled { opacity: .45; }
+.rule-row { display: grid; grid-template-columns: 116px minmax(0, 1fr) 170px auto; gap: 8px; margin-bottom: 8px; align-items: center; }
+.rule-row input { width: 100%; border: 1px solid var(--border); background: var(--surface-2); border-radius: 9px; padding: 7px 11px; outline: none; }
+.rule-row input:focus { border-color: var(--accent); }
+.rule-row .sel { width: 100%; }
+#prfForm .modal-foot { position: sticky; bottom: 0; background: var(--surface); padding-top: 12px; border-top: 1px solid var(--border); }
+@media (max-width: 760px) {
+  .svc-grid { grid-template-columns: 1fr; }
+  .rule-row { grid-template-columns: 1fr 1fr auto; }
+  .rule-row input { grid-column: 1 / -1; grid-row: 1; }
+  .opt-row { padding-top: 0; margin-bottom: 14px; }
+}
+
 /* 任务日志 */
 .log-box { background: #0f1017; color: #d6d8e6; border-radius: 10px; padding: 12px 14px; height: 340px; overflow: auto; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .log-box .ok { color: #5fe3a1; }
@@ -412,15 +440,16 @@ tbody tr:hover td { background: var(--surface-2); }
       <h2>用户</h2>
       <span class="chip" id="poolChip"></span>
       <div class="spacer"></div>
+      <button class="btn sm" id="prfBtn" title="管理订阅配置，并把配置应用到用户"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg>配置管理</button>
       <div class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
         <input id="q" placeholder="搜索用户或备注" autocomplete="off">
       </div>
     </div>
-    <table>
-      <thead><tr><th>用户</th><th>状态</th><th>本月流量</th><th class="col-created">创建时间</th><th style="text-align:right">操作</th></tr></thead>
+    <div class="table-scroll"><table>
+      <thead><tr><th>用户</th><th>状态</th><th>配置</th><th>本月流量</th><th class="col-created">创建时间</th><th style="text-align:right">操作</th></tr></thead>
       <tbody id="users"></tbody>
-    </table>
+    </table></div>
     <div class="empty-state" id="empty" hidden>没有匹配的用户</div>
   </section>
 </div>
@@ -438,6 +467,11 @@ tbody tr:hover td { background: var(--surface-2); }
       <div class="field">
         <label for="fNote">备注（可选）</label>
         <input id="fNote" maxlength="64" placeholder="例如 张三的手机">
+      </div>
+      <div class="field">
+        <label for="fProfile">配置</label>
+        <select class="sel" id="fProfile"></select>
+        <div class="hint">决定订阅里的节点和分流规则，之后可以在用户列表里随时切换。</div>
       </div>
       <div class="callout" id="addCallout"></div>
     </div>
@@ -629,6 +663,81 @@ tbody tr:hover td { background: var(--surface-2); }
       <p class="hint">下载的备份<b>未加密</b>，里面有所有用户密码、Cloudflare Token 和管理节点的私钥，请妥善保管。恢复方法见「使用手册 → 备份与恢复」。</p>
     </div>
   </div>
+</div>
+
+<!-- 配置管理 -->
+<div class="modal-bg" id="prfModal">
+  <div class="modal wide">
+    <div class="modal-head"><h3>配置管理</h3><button class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-body">
+      <p class="howto" style="margin-top:0">每个用户使用一份配置，决定订阅里有哪些节点、怎么分流。切换配置只重新生成订阅，<b>节点不会重启</b>；用户在客户端更新订阅后生效。</p>
+      <div id="prfList"></div>
+      <button class="btn primary sm" id="prfNew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建配置</button>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑配置：内容较多，点背景或按 Esc 不关闭，避免误操作丢失 -->
+<div class="modal-bg" id="prfEdit" data-sticky="1">
+  <form class="modal xwide" id="prfForm" autocomplete="off">
+    <div class="modal-head"><h3 id="peTitle">新建配置</h3></div>
+    <div class="modal-body">
+      <div class="grid2">
+        <div class="field"><label for="peName">名称</label><input id="peName" required maxlength="32" placeholder="例如 家人专用"></div>
+        <div class="field"><label for="peNote">备注（可选）</label><input id="peNote" maxlength="64" placeholder="这份配置给谁用"></div>
+      </div>
+
+      <div class="sec-title" style="margin-top:4px">节点</div>
+      <div class="radio-row">
+        <label><input type="radio" name="peNodes" value="all">全部节点（以后新增的节点自动包含）</label>
+        <label><input type="radio" name="peNodes" value="some">指定节点</label>
+      </div>
+      <div class="field" id="peNodeBox" style="margin-bottom:6px"><div class="ver-list" id="peNodeList"></div></div>
+      <p class="hint" style="margin-top:0">只决定订阅里出现哪些节点，不是访问控制：账号在所有节点上都有效。</p>
+
+      <div class="sec-title">分流</div>
+      <div class="seg" id="peMode" style="margin-bottom:6px">
+        <button type="button" data-mode="rule">规则分流</button>
+        <button type="button" data-mode="global">全局代理</button>
+      </div>
+      <p class="hint" id="peModeHint" style="margin-top:0"></p>
+      <div class="grid2">
+        <div class="field"><label for="peMain">默认出口（「节点选择」组的默认项）</label><select class="sel" id="peMain" data-choice="main" style="width:100%"></select></div>
+        <div class="opt-row"><label class="switch"><input type="checkbox" id="peAds"><span></span></label><span>拦截常见广告域名</span></div>
+      </div>
+
+      <div id="peSvcBox">
+        <div class="sec-title" style="margin-top:4px">服务分组</div>
+        <div class="cfg-meta" style="margin:0 0 8px">勾选的服务会成为单独的代理组，右边是默认去向，用户可以在客户端里切换。把鼠标放到名称上可以看规则来源。</div>
+        <div class="svc-grid" id="peServices"></div>
+      </div>
+
+      <div class="sec-title">自定义规则</div>
+      <div class="cfg-meta" style="margin:0 0 8px">按顺序最先匹配（排在广告和服务组前面，只有局域网地址比它们优先）。域名后缀 <code>example.com</code> 同时匹配它和它的所有子域名。</div>
+      <div id="peRules"></div>
+      <button type="button" class="btn sm" id="peAddRule"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加规则</button>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn ghost" id="pePreview" style="margin-right:auto">预览</button>
+      <button type="button" class="btn" data-close>取消</button>
+      <button type="submit" class="btn primary">保存</button>
+    </div>
+  </form>
+</div>
+
+<!-- 把配置应用到用户 -->
+<div class="modal-bg" id="prfApply">
+  <form class="modal" id="paForm">
+    <div class="modal-head"><h3 id="paTitle">应用配置</h3></div>
+    <div class="modal-body">
+      <div class="field"><div class="ver-list" id="paList"></div>
+        <div class="hint">勾选的用户切换到这份配置，节点不会重启；用户在客户端更新订阅后生效。</div></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close>取消</button>
+      <button type="submit" class="btn primary">应用</button>
+    </div>
+  </form>
 </div>
 
 <!-- 订阅配置详情 -->
@@ -859,11 +968,11 @@ function openModal(id) { $(id).classList.add("show"); }
 function closeModal(id) { $(id).classList.remove("show"); }
 document.querySelectorAll(".modal-bg").forEach((bg) => {
   bg.addEventListener("click", (e) => {
-    if (e.target === bg || e.target.closest("[data-close]")) closeModal("#" + bg.id);
+    if ((e.target === bg && !bg.dataset.sticky) || e.target.closest("[data-close]")) closeModal("#" + bg.id);
   });
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") document.querySelectorAll(".modal-bg.show").forEach((m) => m.classList.remove("show"));
+  if (e.key === "Escape") document.querySelectorAll(".modal-bg.show:not([data-sticky])").forEach((m) => m.classList.remove("show"));
 });
 
 // 取消时返回 false，确认时返回 { checked }（check 为可选的复选框 { label, checked }）
@@ -922,6 +1031,8 @@ function render() {
           : u.pending_purge ? `<span class="pill off" title="订阅已失效；节点上的账号将在 ${esc(state.pool.maintenance)} 维护时清理，在此之前已导入配置的设备仍可连接">停用 · 待清理</span>`
           : `<span class="pill off">停用</span>`}
       </div></td>
+      <td><select class="sel sm" data-act="profile" title="使用的配置；切换后节点不重启，用户在客户端更新订阅后生效">${state.profiles.map((p) =>
+        `<option value="${esc(p.id)}" ${p.id === u.profile ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></td>
       <td class="traffic-cell">${state.traffic.enabled
         ? `<button data-act="traffic" title="上传 ${fmtBytes(u.month[0])} · 下载 ${fmtBytes(u.month[1])}，点击查看详情">${fmtBytes(u.month[0] + u.month[1])}</button>`
         : `<span class="muted">–</span>`}</td>
@@ -1062,6 +1173,7 @@ const purgeNote = () => `节点上的账号会在每天 <b>${esc(state.pool.main
 
 $("#addBtn").onclick = () => {
   $("#addForm").reset();
+  $("#fProfile").innerHTML = state.profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
   const c = $("#addCallout");
   c.className = poolEmpty() ? "callout" : "callout ok";
   c.textContent = poolEmpty()
@@ -1074,7 +1186,7 @@ $("#addForm").onsubmit = async (e) => {
   e.preventDefault();
   const name = $("#fName").value.trim();
   closeModal("#addModal");
-  const ok = await mutate("POST", "api/users", { name, note: $("#fNote").value }, `用户 ${name} 创建成功`, poolEmpty());
+  const ok = await mutate("POST", "api/users", { name, note: $("#fNote").value, profile: $("#fProfile").value }, `用户 ${name} 创建成功`, poolEmpty());
   const u = ok && state.users.find((x) => x.name === name);
   if (u) showSub(u);
 };
@@ -1139,6 +1251,13 @@ $("#users").addEventListener("click", async (e) => {
       "删除", true, { label: KICK_LABEL, checked: false });
     if (r) mutate("DELETE", path, { immediate: r.checked }, `${name} 已删除成功`, r.checked);
   }
+});
+
+$("#users").addEventListener("change", async (e) => {
+  if (e.target.dataset.act !== "profile") return;
+  const name = e.target.closest("tr").dataset.name;
+  const ok = await mutate("POST", `api/users/${encodeURIComponent(name)}/profile`, { profile: e.target.value }, `${name} 的配置切换成功`, false);
+  if (!ok) render();  // 失败时选择框回到原来的配置
 });
 
 // ---------- 节点 ----------
@@ -1453,6 +1572,8 @@ const CFG_FILES = {
   uri: { file: "uri_decoded", ext: "txt", lang: "uri", hint: "Shadowrocket 等拿到的是这些链接的 base64 编码，这里解码后显示；每行一个节点。" },
 };
 
+const MODE_NAME = { rule: "规则分流", global: "全局代理" };
+
 // 只转义 & < >，保留引号以便高亮；内容放在 <pre> 文本里是安全的
 const escCode = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
@@ -1487,12 +1608,13 @@ function renderOverview(d) {
     + `<div class="chips">${g.members.map((m) => `<span class="${m === g.default ? "on" : ""}">${esc(m)}</span>`).join("")}</div></div>`).join("");
   const rules = `<ol class="rules">${ov.rules.map((r) => `<li><span class="m">${esc(r.match)}</span><span class="muted">→</span><span class="t">${esc(r.target)}</span></li>`).join("")}</ol>`;
   $("#cfgOverview").innerHTML =
-    (d.enabled ? "" : `<div class="callout" style="margin-bottom:12px">该用户已停用，当前没有下发订阅；下面是启用后会下发的结构。</div>`)
+    `<div class="cfg-meta">使用配置：<b>${esc(ov.profile.name)}</b> · ${esc(MODE_NAME[ov.profile.mode])}</div>`
+    + (d.enabled ? "" : `<div class="callout" style="margin-bottom:12px">该用户已停用，当前没有下发订阅；下面是启用后会下发的结构。</div>`)
     + `<div class="sec-title" style="margin-top:0">节点（${ov.nodes.length}）</div>${nodes}`
     + `<div class="sec-title">代理组（${ov.groups.length}）</div><div class="cfg-meta">高亮的是默认选项，用户可以在客户端里切换。</div>${groups}`
     + `<div class="sec-title">分流规则（从上到下依次匹配）</div>${rules}`
     + `<div class="sec-title">DNS</div><ul style="margin:0;padding-left:20px;font-size:13px">${ov.dns.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
-    + `<p class="hint">规则数据：${esc(ov.rule_source)}；测速地址 <code>${esc(ov.test_url)}</code>。分组与规则对所有用户相同，只有节点密码不同。</p>`;
+    + `<p class="hint">规则数据：${esc(ov.rule_source)}；测速地址 <code>${esc(ov.test_url)}</code>。使用同一份配置的用户分组与规则相同，只有节点密码不同。通用链接只有节点列表，分流由客户端决定。</p>`;
 }
 
 function renderRaw() {
@@ -1526,6 +1648,7 @@ async function showConfig(name) {
   catch (e) { toast("err", "获取配置失败", e.message); return; }
   $("#cfgTitle").textContent = `订阅配置 · ${cfgData.name}`;
   $("#cfgReveal").checked = false;
+  $("#cfgTabs").style.display = "";
   renderOverview(cfgData);
   setCfgTab("overview");
   openModal("#cfgModal");
@@ -1546,6 +1669,231 @@ $("#cfgDownload").onclick = () => {
   a.download = `${cfgData.name}-${cfgTab}.${meta.ext}`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+// ---------- 配置管理 ----------
+let prfInfo = null;
+let prfEditing = null;  // 正在编辑的配置 id，新建时为 null
+let paTarget = null;
+
+function profileSummary(p) {
+  const parts = [MODE_NAME[p.mode], p.nodes ? `${p.nodes.length} 个节点` : "全部节点"];
+  if (p.mode === "rule") parts.push(`${Object.values(p.services).filter((s) => s.enabled).length} 个服务组`);
+  parts.push(p.ads ? "拦截广告" : "不拦截广告");
+  if (p.custom_rules.length) parts.push(`${p.custom_rules.length} 条自定义规则`);
+  return parts.join(" · ");
+}
+
+async function loadProfiles() {
+  prfInfo = await api("GET", "api/profiles");
+  $("#prfList").innerHTML = prfInfo.profiles.map((p) => `
+    <div class="prf" data-id="${esc(p.id)}">
+      <div class="prf-main">
+        <div class="grp-head"><b>${esc(p.name)}</b>${p.builtin ? `<span class="badge">内置</span>` : ""}
+          <span class="grp-type" title="${esc(p.users.join("、"))}">${p.users.length} 个用户</span></div>
+        <div class="grp-type" style="margin-top:2px">${esc(profileSummary(p))}</div>
+        ${p.note ? `<div class="hint" style="margin-top:2px">${esc(p.note)}</div>` : ""}
+      </div>
+      <div class="dom-actions">
+        <button class="btn sm ghost" data-act="view">查看</button>
+        <button class="btn sm ghost" data-act="apply">应用到用户</button>
+        <button class="btn sm ghost" data-act="copy">复制</button>
+        ${p.builtin ? "" : `<button class="btn sm ghost" data-act="edit">编辑</button>
+        <button class="btn sm ghost danger" data-act="del">删除</button>`}
+      </div>
+    </div>`).join("");
+}
+
+function showOverview(title, overview) {
+  cfgData = { name: title, enabled: true, overview, files: null };
+  $("#cfgTitle").textContent = title;
+  renderOverview(cfgData);
+  $("#cfgTabs").style.display = "none";
+  $("#cfgOverview").hidden = false;
+  $("#cfgRaw").hidden = true;
+  openModal("#cfgModal");
+}
+
+$("#prfBtn").onclick = async () => {
+  try { await loadProfiles(); openModal("#prfModal"); }
+  catch (e) { toast("err", "获取配置失败", e.message); }
+};
+$("#prfNew").onclick = () => openEditor({ ...prfInfo.profiles[0], name: "", note: "" }, null);
+
+$("#prfList").addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const p = prfInfo.profiles.find((x) => x.id === el.closest(".prf").dataset.id);
+  const act = el.dataset.act;
+  if (act === "view") {
+    try { showOverview(`配置 · ${p.name}`, await api("GET", `api/profiles/${p.id}/overview`)); }
+    catch (err) { toast("err", "获取配置失败", err.message); }
+  } else if (act === "edit") {
+    openEditor(p, p.id);
+  } else if (act === "copy") {
+    openEditor({ ...p, name: `${p.name} 副本`.slice(0, 32) }, null);
+  } else if (act === "apply") {
+    openApply(p);
+  } else if (act === "del") {
+    const r = await confirmBox("删除配置", `确定删除 <b>${esc(p.name)}</b>？`
+      + (p.users.length ? `<br><br>正在使用它的 ${p.users.length} 个用户（${esc(p.users.join("、"))}）会回到默认配置。` : ""), "删除", true);
+    if (r && await mutate("DELETE", `api/profiles/${p.id}`, {}, `配置 ${p.name} 删除成功`, false)) loadProfiles();
+  }
+});
+
+// ---------- 编辑配置 ----------
+function editorNodes() {
+  if (document.querySelector('input[name="peNodes"]:checked').value === "all") return prfInfo.catalog.nodes;
+  return [...document.querySelectorAll("#peNodeList input:checked")].map((c) => c.value);
+}
+
+function choiceOptions(kind, nodes) {
+  const opt = (v, t) => `<option value="${esc(v)}">${esc(t)}</option>`;
+  const plain = {
+    main: [["auto", "♻️ 自动选择（延迟最低）"]],
+    service: [["proxy", "跟随节点选择"], ["direct", "直连"]],
+    rule: [["proxy", "走节点选择"], ["direct", "直连"], ["reject", "拒绝"]],
+  }[kind];
+  const regions = prfInfo.catalog.regions.filter((r) => r.members.some((m) => nodes.includes(m)));
+  return plain.map(([v, t]) => opt(v, t)).join("")
+    + (regions.length ? `<optgroup label="地区">${regions.map((r) => opt(`region:${r.title}`, r.title)).join("")}</optgroup>` : "")
+    + (nodes.length ? `<optgroup label="节点">${nodes.map((n) => opt(`node:${n}`, n)).join("")}</optgroup>` : "");
+}
+
+// 节点选择变化后重建各下拉框。data-want 记住原来的选择：地区或节点暂时不可选时退回第一项，重新勾选后还能恢复
+function refreshChoices() {
+  const nodes = editorNodes();
+  document.querySelectorAll("#prfForm select[data-choice]").forEach((sel) => {
+    sel.innerHTML = choiceOptions(sel.dataset.choice, nodes);
+    sel.value = sel.dataset.want;
+    if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+  });
+}
+
+function setPeMode(mode) {
+  document.querySelectorAll("#peMode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  $("#peSvcBox").hidden = mode !== "rule";
+  $("#peModeHint").textContent = mode === "rule"
+    ? "国内网站直连，境外网站走节点，服务按下面的分组走。"
+    : "除局域网地址和自定义规则外，所有流量都走节点，访问国内网站也会绕到境外。";
+}
+
+function addRuleRow(rule) {
+  const row = document.createElement("div");
+  row.className = "rule-row";
+  row.innerHTML = `<select class="sel" data-f="type">${Object.entries(prfInfo.catalog.rule_types).map(([v, t]) =>
+      `<option value="${esc(v)}" ${v === rule.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
+    <input data-f="value" maxlength="253" placeholder="例如 example.com" value="${esc(rule.value)}">
+    <select class="sel" data-f="target" data-choice="rule" data-want="${esc(rule.target)}"></select>
+    <button type="button" class="btn sm ghost danger" data-del>删除</button>`;
+  $("#peRules").appendChild(row);
+  return row;
+}
+
+function openEditor(p, id) {
+  const c = prfInfo.catalog;
+  prfEditing = id;
+  $("#peTitle").textContent = id ? `编辑配置 · ${p.name}` : "新建配置";
+  $("#peName").value = p.name;
+  $("#peNote").value = p.builtin ? "" : p.note || "";
+  document.querySelector(`input[name="peNodes"][value="${p.nodes ? "some" : "all"}"]`).checked = true;
+  $("#peNodeList").innerHTML = c.nodes.map((n) => `<label class="ver-item"><input type="checkbox" value="${esc(n)}" ${!p.nodes || p.nodes.includes(n) ? "checked" : ""}><span class="nm">${esc(n)}</span></label>`).join("");
+  $("#peNodeBox").hidden = !p.nodes;
+  setPeMode(p.mode);
+  $("#peAds").checked = p.ads;
+  $("#peMain").dataset.want = p.main;
+  $("#peServices").innerHTML = c.services.map((s) => {
+    const cur = p.services[s.key] || { enabled: s.enabled, default: s.default };
+    return `<div class="svc"><label title="${esc(s.rules.join("、"))}"><input type="checkbox" data-svc="${esc(s.key)}" ${cur.enabled ? "checked" : ""}>${esc(s.title)}</label>`
+      + `<select class="sel" data-choice="service" data-want="${esc(cur.default)}" ${cur.enabled ? "" : "disabled"}></select></div>`;
+  }).join("");
+  $("#peRules").innerHTML = "";
+  p.custom_rules.forEach(addRuleRow);
+  refreshChoices();
+  openModal("#prfEdit");
+  $("#prfForm").scrollTop = 0;
+  setTimeout(() => $("#peName").focus(), 50);
+}
+
+function collectProfile() {
+  const services = {};
+  document.querySelectorAll("#peServices .svc").forEach((row) => {
+    const box = row.querySelector("[data-svc]");
+    services[box.dataset.svc] = { enabled: box.checked, default: row.querySelector("select").value };
+  });
+  const some = document.querySelector('input[name="peNodes"]:checked').value === "some";
+  return {
+    name: $("#peName").value.trim(),
+    note: $("#peNote").value.trim(),
+    nodes: some ? editorNodes() : null,
+    mode: $("#peMode button.on").dataset.mode,
+    main: $("#peMain").value,
+    ads: $("#peAds").checked,
+    services,
+    // 没填内容的行直接忽略
+    custom_rules: [...document.querySelectorAll("#peRules .rule-row")]
+      .map((row) => ({ type: row.querySelector('[data-f="type"]').value, value: row.querySelector('[data-f="value"]').value.trim(), target: row.querySelector('[data-f="target"]').value }))
+      .filter((r) => r.value),
+  };
+}
+
+$("#peMode").onclick = (e) => { const b = e.target.closest("[data-mode]"); if (b) setPeMode(b.dataset.mode); };
+$("#prfForm").addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.matches("select[data-choice]")) t.dataset.want = t.value;
+  if (t.name === "peNodes") $("#peNodeBox").hidden = t.value !== "some";
+  if (t.name === "peNodes" || t.closest("#peNodeList")) refreshChoices();
+  if (t.dataset.svc) t.closest(".svc").querySelector("select").disabled = !t.checked;
+});
+$("#peAddRule").onclick = () => {
+  const row = addRuleRow({ type: "domain_suffix", value: "", target: "proxy" });
+  const sel = row.querySelector("select[data-choice]");
+  sel.innerHTML = choiceOptions("rule", editorNodes());
+  sel.value = sel.dataset.want;
+  row.querySelector("input").focus();
+};
+$("#peRules").addEventListener("click", (e) => { if (e.target.closest("[data-del]")) e.target.closest(".rule-row").remove(); });
+$("#pePreview").onclick = async () => {
+  try {
+    const name = $("#peName").value.trim();
+    showOverview(`预览${name ? ` · ${name}` : ""}（未保存）`, await api("POST", "api/profiles/preview", collectProfile()));
+  } catch (e) { toast("err", "无法预览", e.message); }
+};
+$("#prfForm").onsubmit = async (e) => {
+  e.preventDefault();
+  busy(true, "正在保存…", false);
+  try {
+    const res = await api("POST", prfEditing ? `api/profiles/${prfEditing}` : "api/profiles", collectProfile());
+    state = res.state;
+    render();
+    closeModal("#prfEdit");
+    toast("ok", "配置已保存", res.log);
+    await loadProfiles();
+  } catch (err) {
+    toast("err", "保存失败", err.message);
+  } finally {
+    busy(false);
+  }
+};
+
+// ---------- 应用到用户 ----------
+function openApply(p) {
+  paTarget = p;
+  const nameOf = (id) => (state.profiles.find((x) => x.id === id) || {}).name || "";
+  $("#paTitle").textContent = `应用「${p.name}」`;
+  $("#paList").innerHTML = state.users.map((u) => {
+    const same = u.profile === p.id;
+    return `<label class="ver-item"><input type="checkbox" value="${esc(u.name)}" ${same ? "checked disabled" : ""}><span class="nm">${esc(u.name)}</span>`
+      + `<span class="cur">${same ? "已在使用" : esc(nameOf(u.profile))}</span></label>`;
+  }).join("") || `<div class="empty-state">还没有用户</div>`;
+  openModal("#prfApply");
+}
+$("#paForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const users = [...document.querySelectorAll("#paList input:checked:not(:disabled)")].map((c) => c.value);
+  if (!users.length) { toast("warn", "请勾选要切换的用户"); return; }
+  closeModal("#prfApply");
+  if (await mutate("POST", `api/profiles/${paTarget.id}/apply`, { users }, `${users.length} 个用户切换到「${paTarget.name}」成功`, false)) loadProfiles();
 };
 
 // ---------- 用户流量 ----------

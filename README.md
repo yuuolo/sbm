@@ -9,6 +9,7 @@
 - **用户管理**：新增、停用、删除、重置；新增用户**不重启节点**（账号池预置备用账号），删除/停用默认在每天凌晨统一清理，也可立即踢下线
 - **订阅**：同一个链接按客户端自动返回 sing-box JSON / Clash YAML / 通用链接；每个用户有专属「使用说明页」，含下载、一键导入按钮、二维码；控制台可查看每个用户的订阅配置细节（概览 + 实际下发的原文，密码默认打码）
 - **代理组与分流**（参照 ACL4SSR 精简分组）：节点选择、自动选择、故障转移、按节点名自动生成的地区组，以及 AI 服务（默认美国节点）、YouTube、Netflix、Telegram、微软、苹果、广告拦截、全球直连、漏网之鱼；sing-box 与 Clash 两种格式分组和规则一致（规则数据来自 MetaCubeX/meta-rules-dat）
+- **配置管理**：现有分组是内置的默认配置，可以新增其他配置并按用户应用：选择节点、规则分流或全局代理、默认出口、是否拦截广告、服务分组（可选 Google、GitHub、X、TikTok、Disney+ 等）、自定义规则（域名或 IP 走节点、直连或拒绝）；切换配置只重新生成订阅，节点不重启
 - **节点管理**：
   - 一键部署新服务器：自动添加 Cloudflare 解析、申请证书、安装 sing-box、写配置、放行防火墙
   - 接入已有 sing-box 节点
@@ -49,7 +50,7 @@
 | `contrib/certbot-restart-sing-box.sh` | 给「接入」节点用的 certbot 续期钩子 | 节点的 `/etc/letsencrypt/renewal-hooks/deploy/` |
 | `install.sh` | 订阅服务器安装 / 更新脚本 | — |
 
-运行时数据（不在仓库里）：`/etc/sbm/`（配置、用户、账号池、流量与检测库、通知渠道、备份密钥）、`/var/backups/sbm/`（本机备份）、`/etc/letsencrypt/`（证书与 Token）、`/root/.ssh/sbm_node`（管理节点的私钥）。
+运行时数据（不在仓库里）：`/etc/sbm/`（配置、用户、账号池、订阅配置、流量与检测库、通知渠道、备份密钥）、`/var/backups/sbm/`（本机备份）、`/etc/letsencrypt/`（证书与 Token）、`/root/.ssh/sbm_node`（管理节点的私钥）。
 
 ## 部署
 
@@ -93,7 +94,8 @@ sudo ./install.sh --upgrade
 ## 命令行
 
 ```bash
-sudo sbm user list | add <名字> | show <名字> | config <名字> [--format singbox|clash|uri] | disable/enable <名字> | del <名字> [--now] | reset <名字>
+sudo sbm user list | add <名字> [--profile 配置] | show <名字> | config <名字> [--format singbox|clash|uri] | disable/enable <名字> | del <名字> [--now] | reset <名字>
+sudo sbm profile list | show <配置> | apply <配置> <用户...>   # 订阅配置（新建和修改在控制台）
 sudo sbm node list | pubkey | deploy <名称> --host <IP> --sub <前缀> [--zone 域名] | attach | del | versions | upgrade [--all]
 sudo sbm domain list | add <域名> | check | token | default | del
 sudo sbm traffic [collect]

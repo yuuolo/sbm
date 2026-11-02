@@ -91,6 +91,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <a class="sub" href="#lifecycle">停用、删除、重置</a>
   <a class="sub" href="#pool">账号池与每日维护</a>
   <a href="#groups">订阅里的代理组</a>
+  <a href="#profiles">配置管理</a>
   <a href="#rules">分流规则详解与来源</a>
   <a href="#traffic">流量统计</a>
   <a href="#nodes">3. 节点管理</a>
@@ -168,7 +169,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 
 <section id="groups">
 <h2>订阅里的代理组</h2>
-<p>sing-box / Hiddify 和 Clash 系客户端拿到的订阅都带有以下代理组（参照常见的 ACL4SSR 精简分组），用户导入后无需设置：</p>
+<p>sing-box / Hiddify 和 Clash 系客户端拿到的订阅都带有以下代理组（参照常见的 ACL4SSR 精简分组），用户导入后无需设置。这里说的是<b>默认配置</b>，想给部分用户换一套，见<a href="#profiles">配置管理</a>：</p>
 <div class="table-wrap"><table>
   <tr><th>代理组</th><th>类型</th><th>默认</th><th>说明</th></tr>
   <tr><td>🚀 节点选择</td><td>手动</td><td>♻️ 自动选择</td><td>主出口；可切换到地区组或具体节点</td></tr>
@@ -185,7 +186,40 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 <p><b>地区组如何生成：</b>按节点名称识别地区（不区分大小写）：<code>HK</code>/香港、<code>TW</code>/台湾、<code>JP</code>/<code>Tokyo</code>/日本、<code>SG</code>/新加坡、<code>KR</code>/韩国、<code>US</code>/美国 等；名称里的地区缩写要独立出现，例如 <code>JP-Tokyo-01</code>、<code>US-LA-01</code>。只有有节点的地区才会出现。给节点起名时按这个习惯即可，识别不到的节点只出现在「节点选择」里。</p>
 <p><b>规则数据：</b>统一使用 MetaCubeX/meta-rules-dat（sing-box 用其 <code>.srs</code> 规则集、Clash Meta 用同源的 geosite/geoip），由客户端通过节点自动下载和更新。Shadowrocket 拿到的是节点列表，使用 App 自带的分流规则。每条规则的内容和来源见下一节。</p>
 <p><b>查看实际内容：</b>控制台里点任一用户的 <b>配置</b>，或命令行 <code>sudo sbm user config 用户名</code>。</p>
-<p><b>修改分组：</b>分组定义在 <code>/usr/local/bin/sbm</code> 的 <code>REGIONS</code> 和 <code>SERVICES</code> 里，改完运行 <code>sudo sbm build</code> 重新生成订阅即可，不会重启节点；用户的客户端下次更新订阅时生效。</p>
+<p><b>修改分组：</b>日常调整请用<a href="#profiles">配置管理</a>，不用改代码。默认配置和可选的服务组目录定义在 <code>/usr/local/bin/sbm</code> 的 <code>REGIONS</code> 和 <code>SERVICES</code> 里。</p>
+</section>
+
+<section id="profiles">
+<h2>配置管理</h2>
+<p>每个用户使用一份<b>配置</b>，决定订阅里有哪些节点、怎么分流。现有的那套是内置的<b>默认配置</b>（不能修改、不能删除），没有指定配置的用户都用它；需要别的方案时新增配置，再应用到用户。</p>
+<div class="tip"><b>切换配置不重启节点：</b>配置只影响生成的订阅，节点上的账号不变。保存后订阅立刻更新，用户在客户端<b>更新订阅</b>后生效（客户端也会定时自动更新）。</div>
+<p><b>操作：</b>用户列表右上角 <b>配置管理</b>。可以查看、复制、编辑、删除配置；新建时默认带上默认配置的内容，也可以复制一份已有的再改。编辑时点 <b>预览</b> 能看到生成的节点、代理组和分流规则，不需要先保存。</p>
+<p><b>应用到用户：</b>三种方式效果相同：</p>
+<ul>
+  <li>用户列表的 <b>配置</b> 列直接切换</li>
+  <li>配置管理里点 <b>应用到用户</b>，一次勾选多个用户</li>
+  <li>新增用户时在弹窗里选择</li>
+</ul>
+<p>每份配置可以设置：</p>
+<div class="table-wrap"><table>
+  <tr><th>项目</th><th>说明</th></tr>
+  <tr><td>节点</td><td>全部节点（以后新增的自动包含），或指定几个节点。地区组按选中的节点重新生成</td></tr>
+  <tr><td>分流模式</td><td><b>规则分流</b>：国内直连、境外走节点，和默认配置相同。<b>全局代理</b>：除局域网地址和自定义规则外全部走节点，访问国内网站也会绕到境外，通常更慢</td></tr>
+  <tr><td>默认出口</td><td>「🚀 节点选择」组的默认项：自动选择、某个地区或某个节点</td></tr>
+  <tr><td>拦截广告</td><td>关闭后不再有广告规则和「🛑 广告拦截」组</td></tr>
+  <tr><td>服务分组</td><td>勾选哪些服务成为单独的代理组，以及各自的默认去向。除默认的 6 个外，还可以打开 Disney+、HBO、Prime Video、Spotify、TikTok、WhatsApp、Discord、Instagram、Facebook、X、GitHub、谷歌服务、Steam</td></tr>
+  <tr><td>自定义规则</td><td>某个域名后缀、完整域名、域名关键字或 IP 段走节点、指定地区或节点、直连或拒绝，最多 200 条</td></tr>
+</table></div>
+<p><b>匹配顺序：</b>局域网地址 → 自定义规则 → 广告 → 服务分组 → 境外 / 国内 → 其余。服务分组的先后是固定的，范围小的排在前面（例如 GitHub 在微软前面），所以打开 GitHub 分组后，它不会被微软规则抢走。</p>
+<p><b>节点或配置被删除时：</b>配置里选的节点都不在了就退回全部节点；默认去向指向的地区或节点不在订阅里时退回节点选择；用户的配置被删除时，用户回到默认配置。订阅不会因此变成无效配置。</p>
+<div class="warn"><b>几个限制：</b>
+<ul style="margin:6px 0 0">
+  <li><b>指定节点不是访问控制。</b>它只决定订阅里出现哪些节点，账号在所有节点上都有效：更新订阅前，旧配置还能连上已经去掉的节点；知道节点地址的人也能手动连接。</li>
+  <li><b>用户在客户端手动选过的组不受影响。</b>客户端会记住用户自己的选择，优先于配置里的默认项。想让新的默认项生效，用户需要在客户端切换一次或重新导入。</li>
+  <li><b>Shadowrocket 等通用链接只有节点列表。</b>配置里只有「节点」对它们生效，分流规则由 App 自己决定。</li>
+  <li><b>sing-box 没有可切换的拦截出站。</b>「拒绝」和广告拦截在 sing-box 里是固定的，用户不能改；Clash 的「🛑 广告拦截」组可以切换。</li>
+</ul></div>
+<p><b>命令行：</b><code>sudo sbm profile list</code> 查看全部配置，<code>sudo sbm profile show 配置名</code> 查看内容，<code>sudo sbm profile apply 配置名 用户1 用户2</code> 应用到用户。新建和修改配置请用控制台。配置保存在 <code>/etc/sbm/profiles.json</code>，会随每天的备份一起备份。</p>
 </section>
 
 <section id="rules">
@@ -364,7 +398,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 <p>在你的电脑上 <code>ssh ubuntu@{{MANAGER_IP}}</code> 登录订阅服务器后使用，所有命令都需要 <code>sudo</code>。命令行和网页控制台共用同一份数据和同一把锁，可以混用。</p>
 <pre><code><span class="c"># 用户</span>
 sudo sbm user list                         <span class="c"># 列出用户、状态、账号池</span>
-sudo sbm user add alice --note "张三的手机"   <span class="c"># 新增（不重启）</span>
+sudo sbm user add alice --note "张三的手机"   <span class="c"># 新增（不重启）；--profile 配置名 可指定配置</span>
 sudo sbm user show alice                   <span class="c"># 查看链接</span>
 sudo sbm user config alice                 <span class="c"># 查看订阅配置概览（节点、代理组、分流规则）</span>
 sudo sbm user config alice --format clash  <span class="c"># 实际下发的原文：singbox | clash | uri</span>
@@ -372,6 +406,11 @@ sudo sbm user disable alice [--now]        <span class="c"># 停用；--now 立�
 sudo sbm user enable alice
 sudo sbm user del alice [--now]            <span class="c"># 删除；--now 立即踢下线</span>
 sudo sbm user reset alice [--later]        <span class="c"># 重置；默认立即生效，--later 凌晨生效</span>
+
+<span class="c"># 订阅配置（不重启节点）</span>
+sudo sbm profile list                      <span class="c"># 全部配置和使用人数</span>
+sudo sbm profile show 配置名                <span class="c"># 节点、代理组、分流规则</span>
+sudo sbm profile apply 配置名 alice bob     <span class="c"># 应用到用户</span>
 
 <span class="c"># 国内可达性与告警</span>
 sudo sbm probe                             <span class="c"># 各节点国内可达性与 24 小时可用率</span>
@@ -457,6 +496,7 @@ sudo sbm domain del example.com            <span class="c"># 删除未使用的�
   <tr><td><code>/etc/sbm/traffic.db</code></td><td>流量统计数据</td></tr>
   <tr><td><code>/etc/sbm/notify.json</code>、<code>/etc/sbm/probe.db</code></td><td>告警通知渠道（含 Webhook / Token）、可达性检测记录</td></tr>
   <tr><td><code>/etc/sbm/config.json</code></td><td>订阅域名、节点列表</td></tr>
+  <tr><td><code>/etc/sbm/profiles.json</code></td><td>新增的订阅配置（默认配置内置在程序里）</td></tr>
   <tr><td><code>/root/.ssh/sbm_node</code></td><td>管理节点用的 SSH 私钥</td></tr>
   <tr><td><code>/etc/letsencrypt/</code></td><td>证书和 Cloudflare Token</td></tr>
 </table></div>

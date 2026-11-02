@@ -4,6 +4,7 @@
 数据:   /etc/sbm/config.json  订阅域名、节点列表
         /etc/sbm/users.json   用户（名称、节点账号、密码、订阅令牌、启用状态）
         /etc/sbm/creds.json   账号池（备用账号、待清理账号、未同步成功的节点）
+        /etc/sbm/profiles.json 订阅配置（默认配置内置在程序里，这里只存新增的）
 输出:   /var/www/sub/<token>/{singbox.json,clash.yaml,uri.txt}，由 Nginx 提供
 
 为什么有账号池：sing-box 只在启动时读取用户列表，改用户必须重启节点。
@@ -883,22 +884,224 @@ REGIONS = [
     ("🇺🇸 美国节点", r"美国|(^|[^a-z])(us|usa|america|los ?angeles|san ?jose|seattle)([^a-z]|$)"),
 ]
 
-# 分流服务组：(组名, 默认选项, geosite 列表, geoip 列表)
-# 默认选项："proxy" 走节点选择，"direct" 直连，"region:<组名>" 优先该地区（没有该地区节点时退回节点选择）
+# 分流服务组目录：(key, 组名, 默认选项, geosite 列表, geoip 列表, 默认配置是否启用)
+# 默认选项："proxy" 走节点选择，"direct" 直连，"region:<组名>" 优先该地区，"node:<节点名>" 优先该节点
+# （地区或节点不在订阅里时退回节点选择）。
+# 规则按这个顺序匹配，范围小的排在前面：geosite:microsoft 包含 GitHub，geoip:google 的范围比 YouTube 大
 SERVICES = [
-    ("🤖 AI 服务", "region:🇺🇸 美国节点", ["category-ai-!cn"], []),
-    ("📹 YouTube", "proxy", ["youtube"], []),
-    ("🎥 Netflix", "proxy", ["netflix"], ["netflix"]),
-    ("📲 Telegram", "proxy", ["telegram"], ["telegram"]),
-    ("Ⓜ️ 微软服务", "direct", ["microsoft"], []),
-    ("🍎 苹果服务", "direct", ["apple"], []),
+    ("ai", "🤖 AI 服务", "region:🇺🇸 美国节点", ["category-ai-!cn"], [], True),
+    ("youtube", "📹 YouTube", "proxy", ["youtube"], [], True),
+    ("netflix", "🎥 Netflix", "proxy", ["netflix"], ["netflix"], True),
+    ("disney", "🏰 Disney+", "proxy", ["disney"], [], False),
+    ("hbo", "🎬 HBO", "proxy", ["hbo"], [], False),
+    ("primevideo", "📦 Prime Video", "proxy", ["primevideo"], [], False),
+    ("spotify", "🎧 Spotify", "proxy", ["spotify"], [], False),
+    ("tiktok", "🎵 TikTok", "proxy", ["tiktok"], [], False),
+    ("telegram", "📲 Telegram", "proxy", ["telegram"], ["telegram"], True),
+    ("whatsapp", "💬 WhatsApp", "proxy", ["whatsapp"], [], False),
+    ("discord", "🎙️ Discord", "proxy", ["discord"], [], False),
+    ("instagram", "📷 Instagram", "proxy", ["instagram"], [], False),
+    ("facebook", "👥 Facebook", "proxy", ["facebook"], ["facebook"], False),
+    ("twitter", "🐦 X / Twitter", "proxy", ["twitter"], ["twitter"], False),
+    ("github", "🐙 GitHub", "proxy", ["github"], [], False),
+    ("google", "🔍 谷歌服务", "proxy", ["google"], ["google"], False),
+    ("steam", "🕹️ Steam", "proxy", ["steam"], [], False),
+    ("microsoft", "Ⓜ️ 微软服务", "direct", ["microsoft"], [], True),
+    ("apple", "🍎 苹果服务", "direct", ["apple"], [], True),
 ]
 
 
-def group_plan(conf):
+# ---------- 订阅配置 ----------
+# 每个用户使用一份配置，决定订阅里的节点、分流模式、服务组和自定义规则。
+# 默认配置内置在程序里（不可修改），没有设置配置的用户都用它；新增的配置存在 profiles.json。
+# 切换配置只重新生成订阅，节点上的账号不变，节点不重启。
+
+PROFILES = f"{ETC}/profiles.json"
+DEFAULT_PROFILE = "default"
+DEFAULT_PROFILE_NAME = "默认配置"
+PROFILE_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+PROFILE_NAME_MAX = 32
+PROFILE_NOTE_MAX = 64
+CUSTOM_RULES_MAX = 200
+RULE_TYPES = {"domain_suffix": "域名后缀", "domain": "完整域名", "domain_keyword": "域名关键字", "ip_cidr": "IP 段"}
+DOMAIN_RE = re.compile(r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
+KEYWORD_RE = re.compile(r"^[a-z0-9.-]{1,64}$")
+
+
+def default_profile():
+    return {
+        "id": DEFAULT_PROFILE, "name": DEFAULT_PROFILE_NAME, "note": "内置配置，不能修改；没有指定配置的用户都用它",
+        "builtin": True, "nodes": None, "mode": "rule", "main": "auto", "ads": True,
+        "services": {key: {"enabled": on, "default": default} for key, _t, default, _gs, _gi, on in SERVICES},
+        "custom_rules": [],
+    }
+
+
+def load_profiles():
+    return load(PROFILES, {"profiles": []})["profiles"]
+
+
+def save_profiles(profiles):
+    write_file(PROFILES, json.dumps({"profiles": profiles}, indent=2, ensure_ascii=False) + "\n", 0o600)
+
+
+def all_profiles():
+    return [default_profile(), *load_profiles()]
+
+
+def get_profile(profiles, pid):
+    for p in profiles:
+        if p["id"] == pid:
+            return p
+    raise SbmError("配置不存在")
+
+
+def user_profile(user, profiles):
+    """用户使用的配置；没有设置，或配置已不存在时用默认配置。"""
+    pid = user.get("profile")
+    return next((p for p in profiles if p["id"] == pid), None) or default_profile()
+
+
+def set_user_profile(user, profiles, pid):
+    """默认配置不写入用户数据，没有用这个功能时 users.json 不变。"""
+    if not pid or pid == DEFAULT_PROFILE:
+        user.pop("profile", None)
+    else:
+        user["profile"] = get_profile(profiles, pid)["id"]
+
+
+def profile_nodes(conf, profile):
+    """配置包含的节点，顺序同节点列表。选中的节点都被删除时退回全部，订阅不能变成空的。"""
+    if not profile["nodes"]:
+        return conf["nodes"]
+    return [n for n in conf["nodes"] if n["name"] in profile["nodes"]] or conf["nodes"]
+
+
+def _clean_choice(conf, value, plain, what):
+    v = str(value or "")
+    if v in plain:
+        return v
+    if v.startswith("region:") and v[7:] in [t for t, _p in REGIONS]:
+        return v
+    if v.startswith("node:") and v[5:] in [n["name"] for n in conf["nodes"]]:
+        return v
+    raise SbmError(f"{what}的选项无效：{v}")
+
+
+def _clean_rule(conf, rule):
+    if not isinstance(rule, dict) or rule.get("type") not in RULE_TYPES:
+        raise SbmError("自定义规则的类型无效")
+    kind, value = rule["type"], str(rule.get("value") or "").strip()
+    if not value:
+        raise SbmError("自定义规则不能留空")
+    if kind == "ip_cidr":
+        try:
+            value = str(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            raise SbmError(f"IP 段格式不对：{value}（例如 203.0.113.0/24）")
+    elif kind == "domain_keyword":
+        value = value.lower()
+        if not KEYWORD_RE.match(value):
+            raise SbmError(f"域名关键字只能包含字母、数字、. -：{value}")
+    else:
+        raw = value
+        value = value.lower()
+        if kind == "domain_suffix":  # 常见写法 *.example.com、.example.com 都当作 example.com
+            value = value.removeprefix("*.").removeprefix(".")
+        try:
+            value = value.encode("idna").decode()  # 中文域名转成 punycode
+        except UnicodeError:
+            raise SbmError(f"域名格式不对：{raw}")
+        if not DOMAIN_RE.match(value):
+            raise SbmError(f"域名格式不对：{raw}（例如 example.com）")
+    return {"type": kind, "value": value,
+            "target": _clean_choice(conf, rule.get("target"), ("direct", "reject", "proxy"), f"规则 {value} ")}
+
+
+def normalize_profile(conf, data):
+    """校验控制台提交的配置，返回只含已知字段的配置。这些内容会写进下发的订阅，所以一律严格校验。"""
+    if not isinstance(data, dict):
+        raise SbmError("配置格式不对")
+    name = str(data.get("name") or "").strip()
+    note = str(data.get("note") or "").strip()
+    if not name or len(name) > PROFILE_NAME_MAX or any(ord(c) < 32 for c in name):
+        raise SbmError(f"配置名称不能为空，最长 {PROFILE_NAME_MAX} 个字符")
+    if len(note) > PROFILE_NOTE_MAX:
+        raise SbmError(f"备注最长 {PROFILE_NOTE_MAX} 个字符")
+    nodes = data.get("nodes")
+    if nodes is not None:
+        known = [n["name"] for n in conf["nodes"]]
+        if not isinstance(nodes, list) or not nodes:
+            raise SbmError("至少选择一个节点")
+        for n in nodes:
+            if n not in known:
+                raise SbmError(f"节点 {n} 不存在")
+        nodes = [n for n in known if n in nodes]
+    mode = data.get("mode")
+    if mode not in ("rule", "global"):
+        raise SbmError("分流模式无效")
+    given = data.get("services") or {}
+    if not isinstance(given, dict):
+        raise SbmError("服务组格式不对")
+    services = {}
+    for key, title, default, _gs, _gi, on in SERVICES:
+        item = given.get(key)
+        item = item if isinstance(item, dict) else {}
+        services[key] = {"enabled": bool(item.get("enabled", on)),
+                         "default": _clean_choice(conf, item.get("default", default), ("proxy", "direct"), f"{title} ")}
+    rules = data.get("custom_rules") or []
+    if not isinstance(rules, list) or len(rules) > CUSTOM_RULES_MAX:
+        raise SbmError(f"自定义规则最多 {CUSTOM_RULES_MAX} 条")
+    return {
+        "name": name, "note": note, "nodes": nodes, "mode": mode,
+        "main": _clean_choice(conf, data.get("main", "auto"), ("auto",), "默认出口"),
+        "ads": bool(data.get("ads", True)), "services": services,
+        "custom_rules": [_clean_rule(conf, r) for r in rules],
+    }
+
+
+def profile_save(conf, profiles, data, pid=None):
+    """新建（pid 为空）或修改配置，只改内存中的 profiles。"""
+    if pid == DEFAULT_PROFILE:
+        raise SbmError("默认配置不能修改，可以复制一份再改")
+    p = normalize_profile(conf, data)
+    if p["name"] == DEFAULT_PROFILE_NAME or any(x["name"] == p["name"] and x["id"] != pid for x in profiles):
+        raise SbmError(f"配置名称 {p['name']} 已存在")
+    if pid:
+        old = get_profile(profiles, pid)
+        p["id"] = pid
+        profiles[profiles.index(old)] = p
+    else:
+        p["id"] = secrets.token_hex(4)
+        profiles.append(p)
+    return p
+
+
+def profile_delete(profiles, users, pid):
+    """删除配置，正在用它的用户回到默认配置，返回这些用户的数量。"""
+    if pid == DEFAULT_PROFILE:
+        raise SbmError("默认配置不能删除")
+    p = get_profile(profiles, pid)
+    moved = [u for u in users if u.get("profile") == pid]
+    for u in moved:
+        u.pop("profile")
+    profiles.remove(p)
+    return len(moved)
+
+
+def _option_ref(choice, region_titles, names):
+    """配置里的选择换成代理组或节点名；地区或节点不在这份订阅里时退回节点选择。"""
+    if choice.startswith("region:") and choice[7:] in region_titles:
+        return choice[7:]
+    if choice.startswith("node:") and choice[5:] in names:
+        return choice[5:]
+    return G_PROXY
+
+
+def group_plan(nodes, profile):
     """返回 (地区组 [(组名, [节点名])], 服务组 [(组名, [选项...默认在第一个], geosite, geoip)])。
-    选项里用 "DIRECT" 表示直连，由各格式自己换成对应的写法。"""
-    names = [n["name"] for n in conf["nodes"]]
+    选项里用 "DIRECT" 表示直连，由各格式自己换成对应的写法。全局代理模式没有服务组。"""
+    names = [n["name"] for n in nodes]
     regions, used = [], set()
     for title, pattern in REGIONS:
         members = [n for n in names if n not in used and re.search(pattern, n, re.I)]
@@ -908,11 +1111,14 @@ def group_plan(conf):
     region_titles = [r[0] for r in regions]
     pool = [G_PROXY, G_AUTO, *region_titles, *names]
     services = []
-    for title, default, geosite, geoip in SERVICES:
-        if default == "direct":
+    for key, title, _default, geosite, geoip, _on in (SERVICES if profile["mode"] == "rule" else []):
+        item = profile["services"].get(key)
+        if not item or not item["enabled"]:
+            continue
+        first = _option_ref(item["default"], region_titles, names)
+        if item["default"] == "direct":
             options = ["DIRECT", *pool]
-        elif default.startswith("region:") and default[7:] in region_titles:
-            first = default[7:]
+        elif first != G_PROXY:
             options = [first, *[x for x in pool if x != first], "DIRECT"]
         else:
             options = [*pool, "DIRECT"]
@@ -920,10 +1126,30 @@ def group_plan(conf):
     return regions, services
 
 
-def build_singbox(conf, user):
-    nodes = conf["nodes"]
+def main_choice(profile, regions, names):
+    """节点选择组的默认项。"""
+    choice = _option_ref(profile["main"], [r[0] for r in regions], names)
+    return G_AUTO if choice == G_PROXY else choice
+
+
+def custom_targets(profile, regions, names):
+    """自定义规则及其去向：[(规则, "DIRECT" / "REJECT" / 代理组或节点名)]。"""
+    titles = [r[0] for r in regions]
+    plain = {"direct": "DIRECT", "reject": "REJECT"}
+    return [(r, plain.get(r["target"]) or _option_ref(r["target"], titles, names)) for r in profile["custom_rules"]]
+
+
+def first_of(item, items):
+    return [item, *[x for x in items if x != item]]
+
+
+def build_singbox(conf, user, profile=None):
+    profile = profile or default_profile()
+    nodes = profile_nodes(conf, profile)
     names = [n["name"] for n in nodes]
-    regions, services = group_plan(conf)
+    regions, services = group_plan(nodes, profile)
+    rule_mode = profile["mode"] == "rule"
+    main = main_choice(profile, regions, names)
     sb = lambda x: "direct" if x == "DIRECT" else x  # noqa: E731
 
     def urltest(tag, members):
@@ -943,29 +1169,49 @@ def build_singbox(conf, user):
         {"protocol": "dns", "action": "hijack-dns"},
         {"ip_is_private": True, "outbound": "direct"},
         {"rule_set": [rs("geosite", "private")], "outbound": "direct"},
-        # sing-box 1.11 起没有可选的 block 出站，广告直接拒绝
-        {"rule_set": [rs("geosite", "category-ads-all")], "action": "reject"},
     ]
+    custom = custom_targets(profile, regions, names)
+    for rule, target in custom:
+        action = {"action": "reject"} if target == "REJECT" else {"outbound": sb(target)}
+        route_rules.append({rule["type"]: [rule["value"]], **action})
+    if profile["ads"]:
+        # sing-box 1.11 起没有可选的 block 出站，广告直接拒绝
+        route_rules.append({"rule_set": [rs("geosite", "category-ads-all")], "action": "reject"})
     for title, _options, geosite, geoip in services:
         route_rules.append({"rule_set": [rs("geosite", g) for g in geosite] + [rs("geoip", g) for g in geoip],
                             "outbound": title})
-    route_rules += [
-        {"rule_set": [rs("geosite", "geolocation-!cn")], "outbound": G_PROXY},
-        {"rule_set": [rs("geosite", "cn"), rs("geoip", "cn")], "outbound": G_DIRECT},
-    ]
+    if rule_mode:
+        route_rules += [
+            {"rule_set": [rs("geosite", "geolocation-!cn")], "outbound": G_PROXY},
+            {"rule_set": [rs("geosite", "cn"), rs("geoip", "cn")], "outbound": G_DIRECT},
+        ]
     region_titles = [r[0] for r in regions]
     outbounds = [
-        {"type": "selector", "tag": G_PROXY, "outbounds": [G_AUTO, *region_titles, *names, "direct"], "default": G_AUTO},
+        {"type": "selector", "tag": G_PROXY, "outbounds": first_of(main, [G_AUTO, *region_titles, *names, "direct"]),
+         "default": main},
         urltest(G_AUTO, names),
         *[urltest(title, members) for title, members in regions],
         *[{"type": "selector", "tag": title, "outbounds": [sb(o) for o in options], "default": sb(options[0])}
           for title, options, _gs, _gi in services],
-        {"type": "selector", "tag": G_DIRECT, "outbounds": ["direct", G_PROXY], "default": "direct"},
-        {"type": "selector", "tag": G_FINAL, "outbounds": [G_PROXY, "direct", G_AUTO, *region_titles, *names],
-         "default": G_PROXY},
+        *([{"type": "selector", "tag": G_DIRECT, "outbounds": ["direct", G_PROXY], "default": "direct"},
+           {"type": "selector", "tag": G_FINAL, "outbounds": [G_PROXY, "direct", G_AUTO, *region_titles, *names],
+            "default": G_PROXY}] if rule_mode else []),
         *[outbound_singbox(n, user) for n in nodes],
         {"type": "direct", "tag": "direct"},
     ]
+    # TUN 模式下连接目标是 DNS 解析出的 IP，自定义规则里的域名也要用对应的 DNS：
+    # 直连的用国内 DNS，走节点的用境外 DNS（被拒绝的不需要）
+    dns_custom = [{rule["type"]: [rule["value"]], "server": "local" if target == "DIRECT" else "remote"}
+                  for rule, target in custom if rule["type"] != "ip_cidr" and target != "REJECT"]
+    dns_rules = [
+        # 已知境外域名：境外 DNS（经节点），避免被国内 DNS 污染，也不泄露给国内 DNS
+        {"rule_set": ["geosite-geolocation-!cn"], "server": "remote"},
+        # 已知国内域名：国内 DNS，拿到就近的国内 CDN 地址
+        {"rule_set": ["geosite-cn", "geosite-private"], "server": "local"},
+        # 列表外的域名：先问国内 DNS，结果是国内 IP 才采用（IP 规则集在 DNS 规则里是「地址过滤」），
+        # 否则跳过本条交给 final 的境外 DNS。这样列表外的国内网站也能拿到国内 IP，按 geoip:cn 直连
+        {"rule_set": ["geoip-cn"], "server": "local"},
+    ] if rule_mode else [{"rule_set": ["geosite-private"], "server": "local"}]
     return {
         "log": {"level": "warn"},
         "dns": {
@@ -973,15 +1219,7 @@ def build_singbox(conf, user):
                 {"type": "https", "tag": "remote", "server": "1.1.1.1", "detour": G_PROXY},
                 {"type": "https", "tag": "local", "server": "223.5.5.5"},
             ],
-            "rules": [
-                # 已知境外域名：境外 DNS（经节点），避免被国内 DNS 污染，也不泄露给国内 DNS
-                {"rule_set": ["geosite-geolocation-!cn"], "server": "remote"},
-                # 已知国内域名：国内 DNS，拿到就近的国内 CDN 地址
-                {"rule_set": ["geosite-cn", "geosite-private"], "server": "local"},
-                # 列表外的域名：先问国内 DNS，结果是国内 IP 才采用（IP 规则集在 DNS 规则里是「地址过滤」），
-                # 否则跳过本条交给 final 的境外 DNS。这样列表外的国内网站也能拿到国内 IP，按 geoip:cn 直连
-                {"rule_set": ["geoip-cn"], "server": "local"},
-            ],
+            "rules": [*dns_custom, *dns_rules],
             "final": "remote",
             "strategy": "prefer_ipv4",
         },
@@ -996,7 +1234,7 @@ def build_singbox(conf, user):
         "route": {
             "rules": route_rules,
             "rule_set": list(rule_sets.values()),
-            "final": G_FINAL,
+            "final": G_FINAL if rule_mode else G_PROXY,
             "auto_detect_interface": True,
             "default_domain_resolver": "local",
         },
@@ -1010,7 +1248,18 @@ def q(s):
     return json.dumps(s, ensure_ascii=False)
 
 
-def build_clash(conf, user):
+def clash_custom_rule(rule, target):
+    value = rule["value"]
+    if rule["type"] == "ip_cidr":
+        kind = "IP-CIDR6" if ":" in value else "IP-CIDR"
+        return f"{kind},{value},{target},no-resolve"
+    kind = {"domain_suffix": "DOMAIN-SUFFIX", "domain": "DOMAIN", "domain_keyword": "DOMAIN-KEYWORD"}[rule["type"]]
+    return f"{kind},{value},{target}"
+
+
+def build_clash(conf, user, profile=None):
+    profile = profile or default_profile()
+    nodes = profile_nodes(conf, profile)
     lines = [
         "mixed-port: 7890",
         "allow-lan: false",
@@ -1032,7 +1281,7 @@ def build_clash(conf, user):
         f"    \"geosite:geolocation-!cn\": [{q('https://1.1.1.1/dns-query#' + G_PROXY)}]",
         "proxies:",
     ]
-    for n in conf["nodes"]:
+    for n in nodes:
         lines += [
             f"  - name: {q(n['name'])}",
             "    type: anytls",
@@ -1044,9 +1293,11 @@ def build_clash(conf, user):
             "    skip-cert-verify: false",
             "    udp: true",
         ]
-    names = [n["name"] for n in conf["nodes"]]
-    regions, services = group_plan(conf)
+    names = [n["name"] for n in nodes]
+    regions, services = group_plan(nodes, profile)
     region_titles = [r[0] for r in regions]
+    rule_mode = profile["mode"] == "rule"
+    main = main_choice(profile, regions, names)
     flow = lambda items: "[" + ", ".join(q(x) for x in items) + "]"  # noqa: E731
 
     def group(name, kind, members, test=False):
@@ -1058,29 +1309,38 @@ def build_clash(conf, user):
         return out
 
     lines.append("proxy-groups:")
-    lines += group(G_PROXY, "select", [G_AUTO, G_FALLBACK, *region_titles, *names, "DIRECT"])
+    lines += group(G_PROXY, "select", first_of(main, [G_AUTO, G_FALLBACK, *region_titles, *names, "DIRECT"]))
     lines += group(G_AUTO, "url-test", names, test=True)
     lines += group(G_FALLBACK, "fallback", names, test=True)
     for title, members in regions:
         lines += group(title, "url-test", members, test=True)
     for title, options, _gs, _gi in services:
         lines += group(title, "select", options)
-    lines += group(G_ADS, "select", ["REJECT", "DIRECT"])
-    lines += group(G_DIRECT, "select", ["DIRECT", G_PROXY])
-    lines += group(G_FINAL, "select", [G_PROXY, "DIRECT", G_AUTO, *region_titles, *names])
+    if profile["ads"]:
+        lines += group(G_ADS, "select", ["REJECT", "DIRECT"])
+    if rule_mode:
+        lines += group(G_DIRECT, "select", ["DIRECT", G_PROXY])
+        lines += group(G_FINAL, "select", [G_PROXY, "DIRECT", G_AUTO, *region_titles, *names])
 
-    rules = ["GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve", f"GEOSITE,category-ads-all,{G_ADS}"]
+    rules = ["GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve"]
+    for rule, target in custom_targets(profile, regions, names):
+        rules.append(clash_custom_rule(rule, target))
+    if profile["ads"]:
+        rules.append(f"GEOSITE,category-ads-all,{G_ADS}")
     for title, _options, geosite, geoip in services:
         rules += [f"GEOSITE,{g},{title}" for g in geosite] + [f"GEOIP,{g},{title},no-resolve" for g in geoip]
-    rules += [f"GEOSITE,geolocation-!cn,{G_PROXY}", f"GEOSITE,cn,{G_DIRECT}", f"GEOIP,CN,{G_DIRECT}", f"MATCH,{G_FINAL}"]
+    if rule_mode:
+        rules += [f"GEOSITE,geolocation-!cn,{G_PROXY}", f"GEOSITE,cn,{G_DIRECT}", f"GEOIP,CN,{G_DIRECT}", f"MATCH,{G_FINAL}"]
+    else:
+        rules.append(f"MATCH,{G_PROXY}")
     lines.append("rules:")
     lines += [f"  - {q(r)}" for r in rules]
     return "\n".join(lines) + "\n"
 
 
-def build_uri(conf, user):
+def build_uri(conf, user, profile=None):
     links = []
-    for n in conf["nodes"]:
+    for n in profile_nodes(conf, profile or default_profile()):
         pw = urllib.parse.quote(user["password"], safe="")
         params = urllib.parse.urlencode({"sni": n["sni"]})
         links.append(f"anytls://{pw}@{n['server']}:{n['port']}/?{params}#{urllib.parse.quote(n['name'])}")
@@ -1092,45 +1352,67 @@ def build_uri(conf, user):
 SUB_FILES = {"singbox": "singbox.json", "clash": "clash.yaml", "uri": "uri.txt"}
 
 
-def subscription_overview(conf):
+def subscription_overview(conf, profile=None):
     """订阅的结构化概览：节点、代理组、分流规则（按匹配顺序）、DNS。
     与 build_singbox / build_clash 用同一份 group_plan，所以和实际下发的内容一致。"""
-    regions, services = group_plan(conf)
-    names = [n["name"] for n in conf["nodes"]]
+    profile = profile or default_profile()
+    nodes = profile_nodes(conf, profile)
+    regions, services = group_plan(nodes, profile)
+    names = [n["name"] for n in nodes]
     region_titles = [r[0] for r in regions]
-    disp = lambda x: "直连" if x == "DIRECT" else x  # noqa: E731
+    rule_mode = profile["mode"] == "rule"
+    main = main_choice(profile, regions, names)
+    disp = lambda x: {"DIRECT": "直连", "REJECT": "拒绝"}.get(x, x)  # noqa: E731
     groups = [
-        {"name": G_PROXY, "type": "手动选择", "default": G_AUTO,
-         "members": [G_AUTO, f"{G_FALLBACK}（仅 Clash）", *region_titles, *names, "直连"]},
+        {"name": G_PROXY, "type": "手动选择", "default": main,
+         "members": first_of(main, [G_AUTO, f"{G_FALLBACK}（仅 Clash）", *region_titles, *names, "直连"])},
         {"name": G_AUTO, "type": "自动测速", "default": "延迟最低", "members": names},
         {"name": G_FALLBACK, "type": "故障转移（仅 Clash）", "default": "第一个可用", "members": names},
         *[{"name": t, "type": "自动测速", "default": "延迟最低", "members": m} for t, m in regions],
         *[{"name": t, "type": "手动选择", "default": disp(o[0]), "members": [disp(x) for x in o]}
           for t, o, _gs, _gi in services],
-        {"name": G_ADS, "type": "手动选择（sing-box 固定拦截）", "default": "拦截", "members": ["拦截", "直连"]},
-        {"name": G_DIRECT, "type": "手动选择", "default": "直连", "members": ["直连", G_PROXY]},
-        {"name": G_FINAL, "type": "手动选择", "default": G_PROXY,
-         "members": [G_PROXY, "直连", G_AUTO, *region_titles, *names]},
     ]
-    rules = [("局域网与私有地址（geosite:private、私有 IP）", "直连"),
-             ("广告（geosite:category-ads-all）", G_ADS)]
+    if profile["ads"]:
+        groups.append({"name": G_ADS, "type": "手动选择（sing-box 固定拦截）", "default": "拦截", "members": ["拦截", "直连"]})
+    if rule_mode:
+        groups += [
+            {"name": G_DIRECT, "type": "手动选择", "default": "直连", "members": ["直连", G_PROXY]},
+            {"name": G_FINAL, "type": "手动选择", "default": G_PROXY,
+             "members": [G_PROXY, "直连", G_AUTO, *region_titles, *names]},
+        ]
+    rules = [("局域网与私有地址（geosite:private、私有 IP）", "直连")]
+    custom = custom_targets(profile, regions, names)
+    rules += [(f"自定义 · {RULE_TYPES[r['type']]} {r['value']}", disp(t)) for r, t in custom]
+    if profile["ads"]:
+        rules.append(("广告（geosite:category-ads-all）", G_ADS))
     for title, _options, geosite, geoip in services:
         rules.append(("、".join([f"geosite:{g}" for g in geosite] + [f"geoip:{g}" for g in geoip]), title))
-    rules += [("境外网站（geosite:geolocation-!cn）", G_PROXY),
-              ("国内网站与 IP（geosite:cn、geoip:cn）", G_DIRECT),
-              ("以上都没有匹配到", G_FINAL)]
-    return {
-        "nodes": [{"name": n["name"], "protocol": "AnyTLS", "server": n["server"], "port": n["port"],
-                   "sni": n["sni"], "region": next((t for t, m in regions if n["name"] in m), "")}
-                  for n in conf["nodes"]],
-        "groups": groups,
-        "rules": [{"match": m, "target": t} for m, t in rules],
-        "dns": [
+    if rule_mode:
+        rules += [("境外网站（geosite:geolocation-!cn）", G_PROXY),
+                  ("国内网站与 IP（geosite:cn、geoip:cn）", G_DIRECT),
+                  ("以上都没有匹配到", G_FINAL)]
+        dns = [
             "sing-box：境外域名用 1.1.1.1（DoH）经「节点选择」解析；国内域名用 223.5.5.5（DoH）；"
             "列表外的域名先问国内 DNS，结果是国内 IP 才采用，否则改用境外 DNS",
             "Clash：fake-ip 模式；默认用阿里 / 腾讯 DoH，境外域名用 1.1.1.1（DoH）经「节点选择」解析；"
             "规则数据每 24 小时自动更新",
-        ],
+        ]
+    else:
+        rules.append(("其余全部流量（全局代理）", G_PROXY))
+        dns = [
+            "sing-box：除局域网域名外都用 1.1.1.1（DoH）经「节点选择」解析",
+            "Clash：fake-ip 模式，域名交给节点解析；规则数据每 24 小时自动更新",
+        ]
+    if any(r["type"] != "ip_cidr" for r, _t in custom):
+        dns.append("sing-box：自定义规则里的域名，直连的用国内 DNS，走节点的用境外 DNS")
+    return {
+        "profile": {"id": profile.get("id", ""), "name": profile["name"], "mode": profile["mode"]},
+        "nodes": [{"name": n["name"], "protocol": "AnyTLS", "server": n["server"], "port": n["port"],
+                   "sni": n["sni"], "region": next((t for t, m in regions if n["name"] in m), "")}
+                  for n in nodes],
+        "groups": groups,
+        "rules": [{"match": m, "target": t} for m, t in rules],
+        "dns": dns,
         "rule_source": "MetaCubeX/meta-rules-dat（sing-box 用 .srs 规则集，Clash Meta 用同源 geosite / geoip）",
         "test_url": TEST_URL,
     }
@@ -1164,24 +1446,59 @@ def _qr_svg(text):
     return img.to_string(encoding="unicode")
 
 
-def build_guide(conf, user):
+def guide_groups(nodes, profile):
+    """使用说明页第 4 步：按用户的配置说明各个分组，默认去向相同的服务组合并成一行。"""
+    regions, services = group_plan(nodes, profile)
+    main = main_choice(profile, regions, [n["name"] for n in nodes])
+    if main == G_AUTO:
+        out = [[G_PROXY, f"默认是 {G_AUTO}（自动用延迟最低的节点）。想固定用某个节点或某个地区，就在这里切换。"]]
+    else:
+        out = [[G_PROXY, f"默认是 {main}。想换成别的节点或地区，就在这里切换。"]]
+    if profile["mode"] == "global":
+        out.append(["🌐 全局代理", "除局域网地址外，所有流量都走节点，访问国内网站也会经过节点。"])
+    buckets = {}
+    for title, options, _gs, _gi in services:
+        buckets.setdefault(options[0], []).append(title)
+    ai = SERVICES[0][1]
+    for first, titles in buckets.items():
+        if first == G_PROXY:
+            text = "默认跟随节点选择，也可以单独指定节点。"
+        elif first == "DIRECT":
+            text = "默认直连，速度更快；个别功能打不开时可以切到节点选择。"
+        elif titles == [ai]:
+            text = f"ChatGPT、Claude、Gemini 等默认走 {first}，避免地区限制。"
+        else:
+            text = f"默认走 {first}，也可以单独切换。"
+        out.append([" / ".join(titles), text])
+    if profile["custom_rules"]:
+        out.append(["🧩 自定义规则", "管理员为部分网站设置了专门的分流方式，无需你操作。"])
+    if profile["ads"]:
+        out.append([G_ADS, "默认拦截常见广告域名；如果某个网站因此打不开，可以切换为直连。"])
+    if profile["mode"] == "rule":
+        out.append([G_DIRECT, "国内网站和应用直连，不受影响。"])
+    return out
+
+
+def build_guide(conf, user, profile=None):
     """用户专属的使用说明页：下载、一键导入、操作步骤，与订阅放在同一个令牌目录下。"""
+    profile = profile or default_profile()
     if not os.path.exists(GUIDE_TPL):
         return None
     base = f"https://{conf['sub_domain']}:{conf['sub_port']}"
     sub = f"{base}/s/{user['token']}"
-    profile = urllib.parse.quote(conf.get("profile_name", "sub"))
+    label = urllib.parse.quote(conf.get("profile_name", "sub"))
     links = {"universal": sub, "singbox": f"{sub}?t=singbox", "clash": f"{sub}?t=clash", "uri": f"{sub}?t=uri"}
     data = {
         "name": user["name"],
         "links": links,
         "imports": {
-            "singbox": f"sing-box://import-remote-profile?url={urllib.parse.quote(links['singbox'], safe='')}#{profile}",
-            "clash": f"clash://install-config?url={urllib.parse.quote(links['clash'], safe='')}&name={profile}",
-            "shadowrocket": "shadowrocket://add/sub://" + base64.b64encode(links["uri"].encode()).decode() + f"?remark={profile}",
-            "hiddify": f"hiddify://import/{sub}#{profile}",
+            "singbox": f"sing-box://import-remote-profile?url={urllib.parse.quote(links['singbox'], safe='')}#{label}",
+            "clash": f"clash://install-config?url={urllib.parse.quote(links['clash'], safe='')}&name={label}",
+            "shadowrocket": "shadowrocket://add/sub://" + base64.b64encode(links["uri"].encode()).decode() + f"?remark={label}",
+            "hiddify": f"hiddify://import/{sub}#{label}",
         },
-        "nodes": [n["name"] for n in conf["nodes"]],
+        "nodes": [n["name"] for n in profile_nodes(conf, profile)],
+        "groups": guide_groups(profile_nodes(conf, profile), profile),
         "qr_guide": _qr_svg(f"{base}/u/{user['token']}"),
         "qr_sub": _qr_svg(sub),
     }
@@ -1194,16 +1511,18 @@ def build_guide(conf, user):
 def build_subs(conf, users):
     os.makedirs(WWW, exist_ok=True)
     keep = set()
+    profiles = load_profiles()
     for u in users:
         if not u["enabled"]:
             continue
         keep.add(u["token"])
         d = os.path.join(WWW, u["token"])
         os.makedirs(d, mode=0o755, exist_ok=True)
-        write_file(f"{d}/singbox.json", json.dumps(build_singbox(conf, u), indent=2, ensure_ascii=False) + "\n")
-        write_file(f"{d}/clash.yaml", build_clash(conf, u))
-        write_file(f"{d}/uri.txt", build_uri(conf, u))
-        guide = build_guide(conf, u)
+        profile = user_profile(u, profiles)
+        write_file(f"{d}/singbox.json", json.dumps(build_singbox(conf, u, profile), indent=2, ensure_ascii=False) + "\n")
+        write_file(f"{d}/clash.yaml", build_clash(conf, u, profile))
+        write_file(f"{d}/uri.txt", build_uri(conf, u, profile))
+        guide = build_guide(conf, u, profile)
         if guide:
             write_file(f"{d}/guide.html", guide)
     # 删除已删除、已停用或已重置用户的旧订阅目录
@@ -1316,13 +1635,14 @@ def assign_cred(creds, user, password=None):
 # 以下用户操作只修改内存中的 users / creds，返回 (是否需要推送节点, 给管理员的提示)；
 # 由 commit() 统一保存并决定是否推送。
 
-def user_add(users, creds, name, note="", password=None):
+def user_add(users, creds, name, note="", password=None, profile=None):
     if not NAME_RE.match(name or ""):
         raise SbmError("用户名只能包含字母、数字、_ . -，最长 32 位")
     if any(u["name"] == name for u in users):
         raise SbmError(f"用户 {name} 已存在")
     u = {"id": secrets.token_hex(6), "name": name, "note": note, "token": rand(32), "enabled": True,
          "created": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    set_user_profile(u, load_profiles(), profile)
     need_push = assign_cred(creds, u, password)
     users.append(u)
     return need_push, ("账号池已用完，本次新建账号需要重启节点" if need_push and not password else "")
@@ -2405,10 +2725,11 @@ def report_text(conf, days=7):
 def cmd_user(args, conf):
     users, creds = load_users(), load_creds()
     if args.action == "list":
-        print(f"{'用户':<20}{'状态':<14}{'节点账号':<16}创建时间")
+        profiles = load_profiles()
+        print(f"{'用户':<20}{'状态':<14}{'节点账号':<16}{'创建时间':<20}配置")
         for u in users:
             status = "启用" if u["enabled"] else ("停用·待清理" if pending_purge(creds, u) else "停用")
-            print(f"{u['name']:<20}{status:<14}{u['cred']:<16}{u['created']}")
+            print(f"{u['name']:<20}{status:<14}{u['cred']:<16}{u['created']:<20}{user_profile(u, profiles)['name']}")
         print(f"\n账号池 {len(creds['spares'])}/{pool_size(conf)}，待清理 {len(creds['retiring'])} 个")
         return
     if args.action == "show":
@@ -2434,25 +2755,16 @@ def cmd_user(args, conf):
                 text = base64.b64decode(text).decode() + "\n"
             sys.stdout.write(text)
             return
-        ov = subscription_overview(conf)
-        print(f"用户 {u['name']} 的订阅配置（{'启用' if u['enabled'] else '停用，当前没有下发'}）\n")
-        print("节点:")
-        for n in ov["nodes"]:
-            print(f"  {n['name']:<18}{n['protocol']}  {n['server']}:{n['port']}  {n['region']}")
-        print("\n代理组（默认 → 可选）:")
-        for g in ov["groups"]:
-            print(f"  {g['name']}  [{g['type']}]  默认 {g['default']}")
-            print(f"      {' / '.join(g['members'])}")
-        print("\n分流规则（从上到下依次匹配）:")
-        for i, r in enumerate(ov["rules"], 1):
-            print(f"  {i:>2}. {r['match']}  →  {r['target']}")
-        print("\nDNS:\n  " + "\n  ".join(ov["dns"]))
-        print(f"\n规则数据: {ov['rule_source']}")
+        ov = subscription_overview(conf, user_profile(u, load_profiles()))
+        print(f"用户 {u['name']} 的订阅配置（{'启用' if u['enabled'] else '停用，当前没有下发'}），"
+              f"使用「{ov['profile']['name']}」\n")
+        print_overview(ov)
         print("\n查看原始内容: sbm user config <名字> --format singbox|clash|uri")
         return
     try:
         if args.action == "add":
-            need_push, notice = user_add(users, creds, args.name, args.note or "", args.password)
+            pid = find_profile(args.profile)["id"] if args.profile else None
+            need_push, notice = user_add(users, creds, args.name, args.note or "", args.password, pid)
         elif args.action == "del":
             need_push, notice = user_delete(users, creds, args.name, args.now)
         elif args.action == "disable":
@@ -2471,6 +2783,66 @@ def cmd_user(args, conf):
         for label, link in sub_links(conf, u).items():
             print(f"  {label}:\n    {link}")
     sys.exit(0 if ok else 1)
+
+
+def find_profile(key):
+    """命令行按名称或 id 查找配置。"""
+    for p in all_profiles():
+        if key in (p["id"], p["name"]):
+            return p
+    raise SbmError(f"配置 {key} 不存在，sbm profile list 可以查看全部配置")
+
+
+def profile_text(p):
+    if p["mode"] == "global":
+        return "全局代理"
+    return f"规则分流，{sum(1 for s in p['services'].values() if s['enabled'])} 个服务组"
+
+
+def print_overview(ov):
+    print("节点:")
+    for n in ov["nodes"]:
+        print(f"  {n['name']:<18}{n['protocol']}  {n['server']}:{n['port']}  {n['region']}")
+    print("\n代理组（默认 → 可选）:")
+    for g in ov["groups"]:
+        print(f"  {g['name']}  [{g['type']}]  默认 {g['default']}")
+        print(f"      {' / '.join(g['members'])}")
+    print("\n分流规则（从上到下依次匹配）:")
+    for i, r in enumerate(ov["rules"], 1):
+        print(f"  {i:>2}. {r['match']}  →  {r['target']}")
+    print("\nDNS:\n  " + "\n  ".join(ov["dns"]))
+    print(f"\n规则数据: {ov['rule_source']}")
+
+
+def cmd_profile(args, conf):
+    users = load_users()
+    try:
+        if args.action == "list":
+            profiles = all_profiles()
+            print(f"{'配置':<24}{'用户数':<8}内容")
+            for p in profiles:
+                count = sum(1 for u in users if user_profile(u, profiles)["id"] == p["id"])
+                nodes = "全部节点" if not p["nodes"] else f"{len(profile_nodes(conf, p))} 个节点"
+                extra = f"，{len(p['custom_rules'])} 条自定义规则" if p["custom_rules"] else ""
+                print(f"{p['name']:<24}{count:<8}{nodes}，{profile_text(p)}{extra}")
+            print("\n新建和修改配置请用控制台的「配置管理」；sbm user list 可以查看每个用户用的配置")
+        elif args.action == "show":
+            if not args.name:
+                die("需要指定配置名称")
+            p = find_profile(args.name)
+            print(f"配置 {p['name']}：{profile_text(p)}\n")
+            print_overview(subscription_overview(conf, p))
+        else:  # apply
+            if not args.name or not args.users:
+                die("用法: sbm profile apply <配置> <用户> [<用户> ...]")
+            p = find_profile(args.name)
+            profiles = load_profiles()
+            for name in args.users:
+                set_user_profile(get_user(users, name), profiles, p["id"])
+            commit(conf, users, load_creds(), False)
+            print(f"{len(args.users)} 个用户已切换到「{p['name']}」，在客户端更新订阅后生效")
+    except SbmError as e:
+        die(str(e))
 
 
 def cmd_domain(args, conf):
@@ -2695,8 +3067,13 @@ def main():
     pu.add_argument("name", nargs="?")
     pu.add_argument("--password", help="add: 指定密码（不走账号池，需要重启节点）")
     pu.add_argument("--note", help="add: 备注")
+    pu.add_argument("--profile", help="add: 使用的配置（名称或 id，默认用默认配置）")
     pu.add_argument("--now", action="store_true", help="del/disable: 立即踢下线（重启节点）")
     pu.add_argument("--later", action="store_true", help="reset: 旧密码在下次维护时才失效（不重启）")
+    pfl = sub.add_parser("profile", help="订阅配置：list 查看；show <配置> 查看内容；apply <配置> <用户...> 应用到用户（不重启节点）")
+    pfl.add_argument("action", choices=["list", "show", "apply"])
+    pfl.add_argument("name", nargs="?")
+    pfl.add_argument("users", nargs="*")
     pn = sub.add_parser("node", help="节点管理", description=(
         "deploy: 在全新服务器上一键部署（自动 DNS、证书、安装 sing-box）\n"
         "attach: 接入已装好 sing-box 且有 AnyTLS 入站的服务器\n"
@@ -2774,6 +3151,9 @@ def main():
             die("需要指定用户名")
         with locked():
             cmd_user(args, conf)
+    elif args.cmd == "profile":
+        with locked():
+            cmd_profile(args, load(CONF))
     elif args.cmd == "sync":
         with locked():
             users = load_users()

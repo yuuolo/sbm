@@ -29,6 +29,7 @@ _loader.exec_module(sbm)
 HERE = os.path.dirname(os.path.abspath(__file__))
 LISTEN = ("127.0.0.1", 8090)
 NOTE_MAX = 64
+PROFILE_BODY_MAX = 64 * 1024  # 配置可以带很多条自定义规则
 _mutex = threading.Lock()
 
 
@@ -49,6 +50,7 @@ def state():
     users = sbm.load_users()
     creds = sbm.load_creds()
     traffic = sbm.traffic_summary(conf)
+    profiles = sbm.all_profiles()
     return {
         "probe": sbm.probe_summary(conf),
         "notify_count": sum(1 for c in sbm.load_notify()["channels"] if c.get("enabled", True)),
@@ -81,10 +83,12 @@ def state():
              "default": d["zone"] == sbm.base_domain(conf), "used_by": sbm.domain_usage(conf, d["zone"])}
             for d in sbm.domains(conf)
         ],
+        "profiles": [{"id": p["id"], "name": p["name"]} for p in profiles],
         "users": [
             {
                 "name": u["name"],
                 "note": u.get("note", ""),
+                "profile": sbm.user_profile(u, profiles)["id"],
                 "enabled": u["enabled"],
                 "pending_purge": sbm.pending_purge(creds, u),
                 "created": u["created"],
@@ -177,7 +181,8 @@ def check_note(note):
 def add_user(body):
     name = (body.get("name") or "").strip()
     note = check_note(body.get("note"))
-    return run_op(lambda users, creds: sbm.user_add(users, creds, name, note))
+    profile = str_field(body, "profile")
+    return run_op(lambda users, creds: sbm.user_add(users, creds, name, note, profile=profile))
 
 
 def user_action(name, action, body):
@@ -191,6 +196,13 @@ def user_action(name, action, body):
             sbm.get_user(users, name)["note"] = note
             return False, ""
         return run_op(set_note)
+    if action == "profile":
+        pid = str_field(body, "profile")
+
+        def set_profile(users, creds):
+            sbm.set_user_profile(sbm.get_user(users, name), sbm.load_profiles(), pid)
+            return False, PROFILE_NOTICE
+        return run_op(set_profile)
     ops = {
         "enable": lambda users, creds: sbm.user_enable(users, creds, name),
         "disable": lambda users, creds: sbm.user_disable(users, creds, name, now),
@@ -200,6 +212,83 @@ def user_action(name, action, body):
     if action not in ops:
         raise ApiError(404, "未知操作")
     return run_op(ops[action])
+
+
+# ---------- 订阅配置（只重新生成订阅，节点不重启） ----------
+
+PROFILE_NOTICE = "用户在客户端更新订阅后生效（客户端也会定时自动更新）"
+
+
+def profile_op(fn):
+    """fn(users, profiles) 只修改内存里的数据，返回给管理员的提示。"""
+    def op(users, creds):
+        profiles = sbm.load_profiles()
+        notice = fn(users, profiles)
+        sbm.save_profiles(profiles)
+        return False, notice
+    return run_op(op)
+
+
+def profiles_info():
+    conf = sbm.load(sbm.CONF)
+    users = sbm.load_users()
+    profiles = sbm.all_profiles()
+    regions, _services = sbm.group_plan(conf["nodes"], sbm.default_profile())
+    return {
+        "profiles": [dict(p, users=[u["name"] for u in users if sbm.user_profile(u, profiles)["id"] == p["id"]])
+                     for p in profiles],
+        "catalog": {
+            "services": [{"key": k, "title": t, "default": d, "enabled": on, "rules": [f"geosite:{g}" for g in gs] + [f"geoip:{g}" for g in gi]}
+                         for k, t, d, gs, gi, on in sbm.SERVICES],
+            "regions": [{"title": t, "members": m} for t, m in regions],
+            "nodes": [n["name"] for n in conf["nodes"]],
+            "rule_types": sbm.RULE_TYPES,
+        },
+    }
+
+
+def profile_overview(pid):
+    try:
+        return sbm.subscription_overview(sbm.load(sbm.CONF), sbm.get_profile(sbm.all_profiles(), pid))
+    except sbm.SbmError as e:
+        raise ApiError(404, str(e))
+
+
+def profile_preview(body):
+    """编辑时预览，不保存；还没填名称也可以预览。"""
+    conf = sbm.load(sbm.CONF)
+    try:
+        draft = sbm.normalize_profile(conf, dict(body, name=str(body.get("name") or "").strip() or "新配置"))
+    except sbm.SbmError as e:
+        raise ApiError(400, str(e))
+    return sbm.subscription_overview(conf, draft)
+
+
+def profile_save(body, pid=None):
+    conf = sbm.load(sbm.CONF)
+    return profile_op(lambda users, profiles: (
+        sbm.profile_save(conf, profiles, body, pid),
+        PROFILE_NOTICE if pid and any(u.get("profile") == pid for u in users) else "",
+    )[1])
+
+
+def profile_delete(pid):
+    def op(users, profiles):
+        moved = sbm.profile_delete(profiles, users, pid)
+        return f"{moved} 个用户已回到默认配置；{PROFILE_NOTICE}" if moved else ""
+    return profile_op(op)
+
+
+def profile_apply(pid, body):
+    names = body.get("users") or []
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+        raise ApiError(400, "请选择用户")
+
+    def op(users, profiles):
+        for name in names:
+            sbm.set_user_profile(sbm.get_user(users, name), profiles, pid)
+        return PROFILE_NOTICE
+    return profile_op(op)
 
 
 def sync_all():
@@ -381,7 +470,8 @@ def user_config(name):
             files["uri_decoded"] = base64.b64decode(files["uri"]).decode()
         except ValueError:
             files["uri_decoded"] = ""
-    return {"name": u["name"], "enabled": u["enabled"], "overview": sbm.subscription_overview(conf),
+    overview = sbm.subscription_overview(conf, sbm.user_profile(u, sbm.load_profiles()))
+    return {"name": u["name"], "enabled": u["enabled"], "overview": overview,
             "files": files, "links": sbm.sub_links(conf, u)}
 
 
@@ -503,12 +593,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             self.send(500, f"页面生成失败: {type(e).__name__}: {e}", "text/plain; charset=utf-8")
 
-    def read_body(self):
+    def read_body(self, limit=4096):
         # 自定义请求头 + JSON：浏览器跨站提交表单无法同时满足这两点，用来防 CSRF
         if self.headers.get("X-Requested-With") != "sbm-web":
             raise ApiError(403, "缺少请求头")
         length = int(self.headers.get("Content-Length") or 0)
-        if length > 4096:
+        if length > limit:
             raise ApiError(413, "请求过大")
         raw = self.rfile.read(length) if length else b"{}"
         try:
@@ -516,9 +606,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             raise ApiError(400, "请求不是合法的 JSON")
 
-    def mutation(self, fn):
+    def mutation(self, fn, limit=4096):
         def run():
-            ok, log = fn(self.read_body())
+            ok, log = fn(self.read_body(limit))
             return {"ok": ok, "log": log, "state": state()}
         self.handle_api(run)
 
@@ -535,6 +625,10 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(node_status)
         elif t := re.fullmatch(r"/api/users/([^/]+)/traffic", url.path):
             self.handle_api(lambda: user_traffic(unquote(t.group(1))))
+        elif url.path == "/api/profiles":
+            self.handle_api(profiles_info)
+        elif pf := re.fullmatch(r"/api/profiles/(default|[0-9a-f]{8})/overview", url.path):
+            self.handle_api(lambda: profile_overview(pf.group(1)))
         elif url.path == "/api/notify":
             self.handle_api(notify_list)
         elif url.path == "/api/backup":
@@ -575,9 +669,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        m = re.fullmatch(r"/api/users/([^/]+)/(enable|disable|reset|note)", path)
+        m = re.fullmatch(r"/api/users/([^/]+)/(enable|disable|reset|note|profile)", path)
+        pf = re.fullmatch(r"/api/profiles/(default|[0-9a-f]{8})(/apply)?", path)
         if path == "/api/users":
             self.mutation(add_user)
+        elif path == "/api/profiles":
+            self.mutation(profile_save, PROFILE_BODY_MAX)
+        elif path == "/api/profiles/preview":
+            self.handle_api(lambda: profile_preview(self.read_body(PROFILE_BODY_MAX)))
+        elif pf and pf.group(2):
+            self.mutation(lambda body: profile_apply(pf.group(1), body))
+        elif pf:
+            self.mutation(lambda body: profile_save(body, pf.group(1)), PROFILE_BODY_MAX)
         elif path == "/api/sync":
             self.mutation(lambda _body: sync_all())
         elif path == "/api/nodes/deploy":
@@ -641,7 +744,10 @@ class Handler(BaseHTTPRequestHandler):
         n = re.fullmatch(r"/api/nodes/([^/]+)", path)
         d = re.fullmatch(r"/api/domains/([a-z0-9.-]+)", path)
         nd = re.fullmatch(r"/api/notify/([0-9a-f]{8})", path)
-        if nd:
+        pf = re.fullmatch(r"/api/profiles/(default|[0-9a-f]{8})", path)
+        if pf:
+            self.mutation(lambda _body: profile_delete(pf.group(1)))
+        elif nd:
             def drop():
                 self.read_body()
 

@@ -209,14 +209,7 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
     <p>订阅里包含以下节点：</p>
     <div class="nodes" id="nodes"></div>
     <p>导入后各个分组已经设置好，<b>一般不用任何改动</b>：</p>
-    <ul class="groups">
-      <li><b>🚀 节点选择</b>：默认是 ♻️ 自动选择（自动用延迟最低的节点）。想固定用某个节点或某个地区，就在这里切换。</li>
-      <li><b>🤖 AI 服务</b>：ChatGPT、Claude、Gemini 等默认走美国节点，避免地区限制。</li>
-      <li><b>📹 YouTube / 🎥 Netflix / 📲 Telegram</b>：默认跟随节点选择，也可以单独指定节点。</li>
-      <li><b>Ⓜ️ 微软服务 / 🍎 苹果服务</b>：默认直连，速度更快；个别功能打不开时可以切到节点选择。</li>
-      <li><b>🛑 广告拦截</b>：默认拦截常见广告域名；如果某个网站因此打不开，可以切换为直连。</li>
-      <li><b>🎯 全球直连</b>：国内网站和应用直连，不受影响。</li>
-    </ul>
+    <ul class="groups" id="groups"></ul>
     <p class="hint">Shadowrocket 使用 App 自带的分流规则，只需在首页选择节点。客户端会每隔一段时间自动更新订阅，管理员新增节点后你无需任何操作。</p>
   </div>
 
@@ -242,6 +235,12 @@ $("#qrGuide").innerHTML = DATA.qr_guide;
 $("#qrSub").innerHTML = DATA.qr_sub;
 $("#subText").textContent = DATA.links.universal;
 DATA.nodes.forEach((n) => { const s = document.createElement("span"); s.textContent = n; $("#nodes").appendChild(s); });
+DATA.groups.forEach(([name, text]) => {
+  const li = document.createElement("li"), b = document.createElement("b");
+  b.textContent = name;
+  li.append(b, `：${text}`);
+  $("#groups").appendChild(li);
+});
 document.querySelectorAll("[data-import]").forEach((a) => { a.href = DATA.imports[a.dataset.import]; });
 
 function tabs(group, attr, initial) {
