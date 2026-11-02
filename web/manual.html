@@ -177,14 +177,14 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <tr><td>🔯 故障转移</td><td>故障转移</td><td>第一个可用</td><td>仅 Clash（sing-box 没有这种类型）</td></tr>
   <tr><td>🇯🇵 日本节点 等地区组</td><td>测速</td><td>延迟最低</td><td>按<b>节点名称</b>自动归类，见下文</td></tr>
   <tr><td>🤖 AI 服务</td><td>手动</td><td>🇺🇸 美国节点</td><td>ChatGPT、Claude、Gemini 等（规则 <code>category-ai-!cn</code>）；没有美国节点时默认节点选择</td></tr>
-  <tr><td>📹 YouTube / 🎥 Netflix / 📲 Telegram</td><td>手动</td><td>🚀 节点选择</td><td>可为某项服务单独指定节点</td></tr>
+  <tr><td>📹 YouTube / 🎥 Netflix / 📲 Telegram / 🐙 GitHub</td><td>手动</td><td>🚀 节点选择</td><td>可为某项服务单独指定节点</td></tr>
   <tr><td>Ⓜ️ 微软服务 / 🍎 苹果服务</td><td>手动</td><td>直连</td><td>国内可直连且更快</td></tr>
   <tr><td>🛑 广告拦截</td><td>手动</td><td>拦截</td><td>规则 <code>category-ads-all</code>；sing-box 里固定为拦截（新版 sing-box 没有可切换的拦截出站）</td></tr>
   <tr><td>🎯 全球直连</td><td>手动</td><td>直连</td><td>国内网站与 IP</td></tr>
   <tr><td>🐟 漏网之鱼</td><td>手动</td><td>🚀 节点选择</td><td>以上都没匹配到的流量</td></tr>
 </table></div>
 <p><b>地区组如何生成：</b>按节点名称识别地区（不区分大小写）：<code>HK</code>/香港、<code>TW</code>/台湾、<code>JP</code>/<code>Tokyo</code>/日本、<code>SG</code>/新加坡、<code>KR</code>/韩国、<code>US</code>/美国 等；名称里的地区缩写要独立出现，例如 <code>JP-Tokyo-01</code>、<code>US-LA-01</code>。只有有节点的地区才会出现。给节点起名时按这个习惯即可，识别不到的节点只出现在「节点选择」里。</p>
-<p><b>规则数据：</b>统一使用 MetaCubeX/meta-rules-dat（sing-box 用其 <code>.srs</code> 规则集、Clash Meta 用同源的 geosite/geoip），由客户端通过节点自动下载和更新。Shadowrocket 拿到的是节点列表，使用 App 自带的分流规则。每条规则的内容和来源见下一节。</p>
+<p><b>规则数据：</b>统一使用 MetaCubeX/meta-rules-dat（sing-box 用其 <code>.srs</code> 规则集、Clash Meta 用同源的 geosite/geoip），由客户端自动下载和更新，详见<a href="#rule-data">规则数据的更新</a>。Shadowrocket 拿到的是节点列表，使用 App 自带的分流规则。每条规则的内容和来源见下一节。</p>
 <p><b>查看实际内容：</b>控制台里点任一用户的 <b>配置</b>，或命令行 <code>sudo sbm user config 用户名</code>。</p>
 <p><b>修改分组：</b>日常调整请用<a href="#profiles">配置管理</a>，不用改代码。默认配置和可选的服务组目录定义在 <code>/usr/local/bin/sbm</code> 的 <code>REGIONS</code> 和 <code>SERVICES</code> 里。</p>
 </section>
@@ -207,10 +207,10 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <tr><td>分流模式</td><td><b>规则分流</b>：国内直连、境外走节点，和默认配置相同。<b>全局代理</b>：除局域网地址和自定义规则外全部走节点，访问国内网站也会绕到境外，通常更慢</td></tr>
   <tr><td>默认出口</td><td>「🚀 节点选择」组的默认项：自动选择、某个地区或某个节点</td></tr>
   <tr><td>拦截广告</td><td>关闭后不再有广告规则和「🛑 广告拦截」组</td></tr>
-  <tr><td>服务分组</td><td>勾选哪些服务成为单独的代理组，以及各自的默认去向。除默认的 6 个外，还可以打开 Disney+、HBO、Prime Video、Spotify、TikTok、WhatsApp、Discord、Instagram、Facebook、X、GitHub、谷歌服务、Steam</td></tr>
+  <tr><td>服务分组</td><td>勾选哪些服务成为单独的代理组，以及各自的默认去向。除默认的 7 个外，还可以打开 Disney+、HBO、Prime Video、Spotify、TikTok、WhatsApp、Discord、Instagram、Facebook、X、谷歌服务、Steam</td></tr>
   <tr><td>自定义规则</td><td>某个域名后缀、完整域名、域名关键字或 IP 段走节点、指定地区或节点、直连或拒绝，最多 200 条</td></tr>
 </table></div>
-<p><b>匹配顺序：</b>局域网地址 → 自定义规则 → 广告 → 服务分组 → 境外 / 国内 → 其余。服务分组的先后是固定的，范围小的排在前面（例如 GitHub 在微软前面），所以打开 GitHub 分组后，它不会被微软规则抢走。</p>
+<p><b>匹配顺序：</b>局域网地址 → 自定义规则 → 广告 → 服务分组 → 境外 / 国内 → 其余。服务分组的先后是固定的，范围小的排在前面（例如 GitHub 在微软前面）。如果在配置里关闭 GitHub 分组，GitHub 会命中微软规则，跟随微软组的去向（默认直连），国内可能打不开。</p>
 <p><b>节点或配置被删除时：</b>配置里选的节点都不在了就退回全部节点；默认去向指向的地区或节点不在订阅里时退回节点选择；用户的配置被删除时，用户回到默认配置。订阅不会因此变成无效配置。</p>
 <div class="warn"><b>几个限制：</b>
 <ul style="margin:6px 0 0">
@@ -233,20 +233,22 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <tr><td>4</td><td>YouTube</td><td>📹 YouTube</td><td>约 180 个域名</td><td><code>youtube.com</code>、<code>ytimg.com</code>、<code>youtu.be</code></td><td>v2fly 社区表</td></tr>
   <tr><td>5</td><td>Netflix（域名 + IP）</td><td>🎥 Netflix</td><td>27 个域名、122 个 IP 段</td><td><code>netflix.com</code>、<code>nflxvideo.net</code>、<code>fast.com</code></td><td>域名：v2fly 社区表；IP：MaxMind GeoLite2 ASN 数据中 Netflix 自有网络</td></tr>
   <tr><td>6</td><td>Telegram（域名 + IP）</td><td>📲 Telegram</td><td>21 个域名、12 个 IP 段</td><td><code>t.me</code>、<code>telegram.org</code>、<code>91.108.4.0/22</code></td><td>域名：v2fly 社区表；IP：Telegram 官方公布的地址段（core.telegram.org/resources/cidr.txt）+ ASN 数据</td></tr>
-  <tr><td>7</td><td>微软</td><td>Ⓜ️ 微软服务（默认直连）</td><td>约 750 个域名</td><td><code>microsoft.com</code>、Office CDN、Windows 更新</td><td>v2fly 社区表</td></tr>
-  <tr><td>8</td><td>苹果</td><td>🍎 苹果服务（默认直连）</td><td>约 1,800 个域名</td><td><code>apple.com</code>、iTunes、iCloud 相关</td><td>v2fly 社区表</td></tr>
-  <tr><td>9</td><td>境外网站<br><code>geolocation-!cn</code></td><td>🚀 节点选择</td><td>约 2.7 万个域名</td><td>常见的境外网站</td><td>GFWList + Loyalsoldier/domain-list-custom（由 v2fly 社区表展开）+ felixonmars 整理的 Google、Apple 在华域名 + 维护者补充；剔除 <code>.cn</code> 结尾的域名</td></tr>
-  <tr><td>10</td><td>国内网站与 IP<br><code>geosite:cn</code>、<code>geoip:cn</code></td><td>🎯 全球直连</td><td>约 11 万个域名、约 1 万个 IP 段</td><td>国内常见网站</td><td>域名：blackmatrix7/ios_rule_script 的 ChinaMax 国内域名表；IP：gaoyifan/china-operator-ip（根据国内运营商 BGP 路由生成，比 MaxMind 国家库更准）</td></tr>
-  <tr><td>11</td><td>以上都没有匹配到</td><td>🐟 漏网之鱼（默认节点选择）</td><td>—</td><td>—</td><td>—</td></tr>
+  <tr><td>7</td><td>GitHub</td><td>🐙 GitHub</td><td>约 65 个域名</td><td><code>github.com</code>、<code>githubusercontent.com</code></td><td>v2fly 社区表</td></tr>
+  <tr><td>8</td><td>微软</td><td>Ⓜ️ 微软服务（默认直连）</td><td>约 750 个域名</td><td><code>microsoft.com</code>、Office CDN、Windows 更新</td><td>v2fly 社区表</td></tr>
+  <tr><td>9</td><td>苹果</td><td>🍎 苹果服务（默认直连）</td><td>约 1,800 个域名</td><td><code>apple.com</code>、iTunes、iCloud 相关</td><td>v2fly 社区表</td></tr>
+  <tr><td>10</td><td>境外网站<br><code>geolocation-!cn</code></td><td>🚀 节点选择</td><td>约 2.7 万个域名</td><td>常见的境外网站</td><td>GFWList + Loyalsoldier/domain-list-custom（由 v2fly 社区表展开）+ felixonmars 整理的 Google、Apple 在华域名 + 维护者补充；剔除 <code>.cn</code> 结尾的域名</td></tr>
+  <tr><td>11</td><td>国内网站与 IP<br><code>geosite:cn</code>、<code>geoip:cn</code></td><td>🎯 全球直连</td><td>约 11 万个域名、约 1 万个 IP 段</td><td>国内常见网站</td><td>域名：blackmatrix7/ios_rule_script 的 ChinaMax 国内域名表；IP：gaoyifan/china-operator-ip（根据国内运营商 BGP 路由生成，比 MaxMind 国家库更准）</td></tr>
+  <tr><td>12</td><td>以上都没有匹配到</td><td>🐟 漏网之鱼（默认节点选择）</td><td>—</td><td>—</td><td>—</td></tr>
 </table></div>
 
 <h3>数据的来源链路</h3>
-<p>v2fly/domain-list-community、Loyalsoldier/domain-list-custom、blackmatrix7/ios_rule_script、felixonmars/dnsmasq-china-list、GFWList、gaoyifan/china-operator-ip、MaxMind GeoLite2、Telegram 官方 → <b>Loyalsoldier/v2ray-rules-dat</b>（原始项目）→ <b>MetaCubeX/meta-rules-dat</b>（其分支，每天自动构建）→ 客户端经节点下载。sing-box 使用其 <code>sing</code> 分支的 <code>geo/</code>（完整版，不是 geo-lite）规则集；Clash Meta 使用同源的 geosite.dat / geoip.dat。</p>
+<p>v2fly/domain-list-community、Loyalsoldier/domain-list-custom、blackmatrix7/ios_rule_script、felixonmars/dnsmasq-china-list、GFWList、gaoyifan/china-operator-ip、MaxMind GeoLite2、Telegram 官方 → <b>Loyalsoldier/v2ray-rules-dat</b>（原始项目）→ <b>MetaCubeX/meta-rules-dat</b>（其分支，每天自动构建）→ 客户端下载。sing-box 使用其 <code>sing</code> 分支的 <code>geo/</code>（完整版，不是 geo-lite）规则集；Clash Meta 使用同源的 geosite.dat / geoip.dat。</p>
 
 <h3>为什么是这个顺序（参照 ACL4SSR）</h3>
 <ul>
   <li><b>广告在服务之前：</b>广告域名先被拦截，即使出现在 YouTube 等页面里。</li>
   <li><b>具体服务在「境外网站」之前：</b>YouTube、AI 等域名同时也在境外列表里，放前面才能单独指定节点（例如 AI 走美国、YouTube 走日本）。</li>
+  <li><b>GitHub 在微软之前：</b><code>geosite:microsoft</code> 包含 GitHub，而微软默认直连，GitHub 在国内直连经常打不开，所以单独成组，默认走节点。</li>
   <li><b>微软、苹果在「国内」之前：</b>它们在国内有 CDN，默认直连更快；境外的 Apple 服务直连一般也能正常访问。</li>
   <li><b>境外在国内之前：</b>两个列表有少量重叠时以境外为准。</li>
   <li><b>IP 规则：</b>主要用于按 IP 直接连接的程序（如 Telegram 客户端内置服务器 IP）；Clash 中 Netflix / Telegram 的 IP 规则带 <code>no-resolve</code>，不会为它们额外发起 DNS 查询。</li>
@@ -258,11 +260,12 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <li><b>Clash：</b>fake-ip 模式；遇到需要按 IP 判断的规则时，默认用阿里 / 腾讯 DoH 解析，境外域名用 1.1.1.1（DoH，经节点）。</li>
 </ul>
 
-<h3>规则数据的更新</h3>
+<h3 id="rule-data">规则数据的更新</h3>
 <ul>
   <li>上游 MetaCubeX/meta-rules-dat 每天自动构建。</li>
-  <li>sing-box：远程规则集默认每天更新一次。</li>
-  <li>Clash：订阅中开启了 <code>geo-auto-update</code>，每 24 小时更新一次 geosite / geoip。</li>
+  <li><b>sing-box：</b>远程规则集的首次下载和之后的更新都明确指定经「节点选择」，默认每天更新一次。</li>
+  <li><b>Clash 更新：</b>订阅中开启了 <code>geo-auto-update</code>，每 24 小时尝试更新一次 geosite / geoip。mihomo 默认从 GitHub 下载，按分流规则走「🐙 GitHub」组（默认经节点）。它每个文件只等 90 秒，而 <code>GeoIP.dat</code> 约 16 MB，节点较慢时更新可能超时。失败不影响使用：继续用旧数据，下次再试。</li>
+  <li><b>Clash 首次启动：</b>客户端没有自带规则数据时，mihomo 要在加载配置时下载，这时还用不上节点，只能直连 GitHub。国内网络下可能超时，并报错退出。Clash Verge Rev 会把自带的数据复制过去，通常不受影响；遇到这个问题的处理方法见<a href="#trouble">故障排查</a>。</li>
 </ul>
 
 <h3>已知局限</h3>
@@ -453,6 +456,8 @@ sudo sbm domain del example.com            <span class="c"># 删除未使用的�
 <h2>6. 故障排查</h2>
 <h3>控制台操作后提示「连接中断」</h3>
 <p>你的电脑正好通过刚重启的节点上网，响应没收到。操作在服务器上通常已完成，页面会在 4 秒后自动刷新确认。</p>
+<h3>Clash 启动报错 can't download GeoSite.dat 或 GeoIP.dat</h3>
+<p>客户端没有自带规则数据，也下载不到，见<a href="#rule-data">规则数据的更新</a>。可以改用 Clash Verge Rev 或 sing-box 类客户端；或者在能访问 GitHub 的网络里，从 MetaCubeX/meta-rules-dat 的发布页下载 <code>geosite.dat</code>、<code>geoip.dat</code>，改名为 <code>GeoSite.dat</code>、<code>GeoIP.dat</code>，放到 mihomo 的配置目录后重新启动。上次下载留下的残缺文件不用先删，直接覆盖即可。</p>
 <h3>某个用户连不上</h3>
 <ol>
   <li>确认用户状态是「启用」。</li>

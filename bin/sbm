@@ -887,7 +887,9 @@ REGIONS = [
 # 分流服务组目录：(key, 组名, 默认选项, geosite 列表, geoip 列表, 默认配置是否启用)
 # 默认选项："proxy" 走节点选择，"direct" 直连，"region:<组名>" 优先该地区，"node:<节点名>" 优先该节点
 # （地区或节点不在订阅里时退回节点选择）。
-# 规则按这个顺序匹配，范围小的排在前面：geosite:microsoft 包含 GitHub，geoip:google 的范围比 YouTube 大
+# 规则按这个顺序匹配，范围小的排在前面：geosite:microsoft 包含 GitHub，geoip:google 的范围比 YouTube 大。
+# GitHub 默认启用：否则它会命中默认直连的微软规则，而 GitHub 在国内直连经常打不开，
+# Clash 从 GitHub 自动更新规则数据时也走这条规则，所以它也是更新能经节点完成的前提
 SERVICES = [
     ("ai", "🤖 AI 服务", "region:🇺🇸 美国节点", ["category-ai-!cn"], [], True),
     ("youtube", "📹 YouTube", "proxy", ["youtube"], [], True),
@@ -903,7 +905,7 @@ SERVICES = [
     ("instagram", "📷 Instagram", "proxy", ["instagram"], [], False),
     ("facebook", "👥 Facebook", "proxy", ["facebook"], ["facebook"], False),
     ("twitter", "🐦 X / Twitter", "proxy", ["twitter"], ["twitter"], False),
-    ("github", "🐙 GitHub", "proxy", ["github"], [], False),
+    ("github", "🐙 GitHub", "proxy", ["github"], [], True),
     ("google", "🔍 谷歌服务", "proxy", ["google"], ["google"], False),
     ("steam", "🕹️ Steam", "proxy", ["steam"], [], False),
     ("microsoft", "Ⓜ️ 微软服务", "direct", ["microsoft"], [], True),
