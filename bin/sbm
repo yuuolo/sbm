@@ -926,6 +926,12 @@ PROFILE_NAME_MAX = 32
 PROFILE_NOTE_MAX = 64
 CUSTOM_RULES_MAX = 200
 RULE_TYPES = {"domain_suffix": "域名后缀", "domain": "完整域名", "domain_keyword": "域名关键字", "ip_cidr": "IP 段"}
+# 应用分流：sing-box 的字段名就是这两个 key。process_name 只在 Windows、macOS、Linux 上生效，
+# package_name 只在安卓上生效；iOS 拿不到发起连接的应用，这些规则不起作用
+APP_RULE_TYPES = {"process_name": "进程名", "package_name": "安卓包名"}
+DOMAIN_RULE_TYPES = ("domain_suffix", "domain", "domain_keyword")
+PROCESS_RE = re.compile(r"^[^\x00-\x1f\x7f,\"/\\:*?<>|]{1,128}$")
+PACKAGE_RE = re.compile(r"^(?=.{1,128}$)[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
 KEYWORD_RE = re.compile(r"^[a-z0-9.-]{1,64}$")
 
@@ -935,7 +941,7 @@ def default_profile():
         "id": DEFAULT_PROFILE, "name": DEFAULT_PROFILE_NAME, "note": "内置配置，不能修改；没有指定配置的用户都用它",
         "builtin": True, "nodes": None, "mode": "rule", "main": "auto", "ads": True,
         "services": {key: {"enabled": on, "default": default} for key, _t, default, _gs, _gi, on in SERVICES},
-        "custom_rules": [],
+        "custom_rules": [], "app_rules": [],
     }
 
 
@@ -1020,6 +1026,20 @@ def _clean_rule(conf, rule):
             "target": _clean_choice(conf, rule.get("target"), ("direct", "reject", "proxy"), f"规则 {value} ")}
 
 
+def _clean_app_rule(conf, rule):
+    if not isinstance(rule, dict) or rule.get("type") not in APP_RULE_TYPES:
+        raise SbmError("应用规则的类型无效")
+    kind, value = rule["type"], str(rule.get("value") or "").strip()
+    if not value:
+        raise SbmError("应用规则不能留空")
+    if kind == "process_name" and not PROCESS_RE.match(value):
+        raise SbmError(f"进程名格式不对：{value}（只填文件名，例如 WeChat.exe，不要路径和逗号）")
+    if kind == "package_name" and not PACKAGE_RE.match(value):
+        raise SbmError(f"安卓包名格式不对：{value}（例如 com.tencent.mm）")
+    return {"type": kind, "value": value,
+            "target": _clean_choice(conf, rule.get("target"), ("direct", "reject", "proxy"), f"应用 {value} ")}
+
+
 def normalize_profile(conf, data):
     """校验控制台提交的配置，返回只含已知字段的配置。这些内容会写进下发的订阅，所以一律严格校验。"""
     if not isinstance(data, dict):
@@ -1054,11 +1074,15 @@ def normalize_profile(conf, data):
     rules = data.get("custom_rules") or []
     if not isinstance(rules, list) or len(rules) > CUSTOM_RULES_MAX:
         raise SbmError(f"自定义规则最多 {CUSTOM_RULES_MAX} 条")
+    apps = data.get("app_rules") or []
+    if not isinstance(apps, list) or len(apps) > CUSTOM_RULES_MAX:
+        raise SbmError(f"应用规则最多 {CUSTOM_RULES_MAX} 条")
     return {
         "name": name, "note": note, "nodes": nodes, "mode": mode,
         "main": _clean_choice(conf, data.get("main", "auto"), ("auto",), "默认出口"),
         "ads": bool(data.get("ads", True)), "services": services,
         "custom_rules": [_clean_rule(conf, r) for r in rules],
+        "app_rules": [_clean_app_rule(conf, r) for r in apps],
     }
 
 
@@ -1135,10 +1159,12 @@ def main_choice(profile, regions, names):
 
 
 def custom_targets(profile, regions, names):
-    """自定义规则及其去向：[(规则, "DIRECT" / "REJECT" / 代理组或节点名)]。"""
+    """自定义规则和应用规则及其去向：[(规则, "DIRECT" / "REJECT" / 代理组或节点名)]。
+    域名和 IP 规则的范围比整个应用小，所以排在应用规则前面。"""
     titles = [r[0] for r in regions]
     plain = {"direct": "DIRECT", "reject": "REJECT"}
-    return [(r, plain.get(r["target"]) or _option_ref(r["target"], titles, names)) for r in profile["custom_rules"]]
+    return [(r, plain.get(r["target"]) or _option_ref(r["target"], titles, names))
+            for r in [*profile["custom_rules"], *profile.get("app_rules", [])]]  # 旧配置没有 app_rules
 
 
 def first_of(item, items):
@@ -1204,7 +1230,7 @@ def build_singbox(conf, user, profile=None):
     # TUN 模式下连接目标是 DNS 解析出的 IP，自定义规则里的域名也要用对应的 DNS：
     # 直连的用国内 DNS，走节点的用境外 DNS（被拒绝的不需要）
     dns_custom = [{rule["type"]: [rule["value"]], "server": "local" if target == "DIRECT" else "remote"}
-                  for rule, target in custom if rule["type"] != "ip_cidr" and target != "REJECT"]
+                  for rule, target in custom if rule["type"] in DOMAIN_RULE_TYPES and target != "REJECT"]
     dns_rules = [
         # 已知境外域名：境外 DNS（经节点），避免被国内 DNS 污染，也不泄露给国内 DNS
         {"rule_set": ["geosite-geolocation-!cn"], "server": "remote"},
@@ -1255,6 +1281,8 @@ def clash_custom_rule(rule, target):
     if rule["type"] == "ip_cidr":
         kind = "IP-CIDR6" if ":" in value else "IP-CIDR"
         return f"{kind},{value},{target},no-resolve"
+    if rule["type"] in APP_RULE_TYPES:  # mihomo 在安卓上用 PROCESS-NAME 匹配包名
+        return f"PROCESS-NAME,{value},{target}"
     kind = {"domain_suffix": "DOMAIN-SUFFIX", "domain": "DOMAIN", "domain_keyword": "DOMAIN-KEYWORD"}[rule["type"]]
     return f"{kind},{value},{target}"
 
@@ -1384,7 +1412,8 @@ def subscription_overview(conf, profile=None):
         ]
     rules = [("局域网与私有地址（geosite:private、私有 IP）", "直连")]
     custom = custom_targets(profile, regions, names)
-    rules += [(f"自定义 · {RULE_TYPES[r['type']]} {r['value']}", disp(t)) for r, t in custom]
+    rules += [(f"应用 · {APP_RULE_TYPES[r['type']]} {r['value']}" if r["type"] in APP_RULE_TYPES
+               else f"自定义 · {RULE_TYPES[r['type']]} {r['value']}", disp(t)) for r, t in custom]
     if profile["ads"]:
         rules.append(("广告（geosite:category-ads-all）", G_ADS))
     for title, _options, geosite, geoip in services:
@@ -1405,7 +1434,7 @@ def subscription_overview(conf, profile=None):
             "sing-box：除局域网域名外都用 1.1.1.1（DoH）经「节点选择」解析",
             "Clash：fake-ip 模式，域名交给节点解析；规则数据每 24 小时自动更新",
         ]
-    if any(r["type"] != "ip_cidr" for r, _t in custom):
+    if any(r["type"] in DOMAIN_RULE_TYPES for r, _t in custom):
         dns.append("sing-box：自定义规则里的域名，直连的用国内 DNS，走节点的用境外 DNS")
     return {
         "profile": {"id": profile.get("id", ""), "name": profile["name"], "mode": profile["mode"]},
@@ -1474,6 +1503,8 @@ def guide_groups(nodes, profile):
         out.append([" / ".join(titles), text])
     if profile["custom_rules"]:
         out.append(["🧩 自定义规则", "管理员为部分网站设置了专门的分流方式，无需你操作。"])
+    if profile.get("app_rules"):
+        out.append(["📱 应用分流", "管理员为部分应用设置了专门的分流方式，无需你操作。iPhone 和 iPad 上不生效。"])
     if profile["ads"]:
         out.append([G_ADS, "默认拦截常见广告域名；如果某个网站因此打不开，可以切换为直连。"])
     if profile["mode"] == "rule":
@@ -2826,6 +2857,7 @@ def cmd_profile(args, conf):
                 count = sum(1 for u in users if user_profile(u, profiles)["id"] == p["id"])
                 nodes = "全部节点" if not p["nodes"] else f"{len(profile_nodes(conf, p))} 个节点"
                 extra = f"，{len(p['custom_rules'])} 条自定义规则" if p["custom_rules"] else ""
+                extra += f"，{len(p['app_rules'])} 条应用规则" if p.get("app_rules") else ""
                 print(f"{p['name']:<24}{count:<8}{nodes}，{profile_text(p)}{extra}")
             print("\n新建和修改配置请用控制台的「配置管理」；sbm user list 可以查看每个用户用的配置")
         elif args.action == "show":

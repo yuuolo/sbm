@@ -243,6 +243,7 @@ def profiles_info():
             "regions": [{"title": t, "members": m} for t, m in regions],
             "nodes": [n["name"] for n in conf["nodes"]],
             "rule_types": sbm.RULE_TYPES,
+            "app_rule_types": sbm.APP_RULE_TYPES,
         },
     }
 

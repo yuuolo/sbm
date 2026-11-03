@@ -209,14 +209,31 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <tr><td>拦截广告</td><td>关闭后不再有广告规则和「🛑 广告拦截」组</td></tr>
   <tr><td>服务分组</td><td>勾选哪些服务成为单独的代理组，以及各自的默认去向。除默认的 7 个外，还可以打开 Disney+、HBO、Prime Video、Spotify、TikTok、WhatsApp、Discord、Instagram、Facebook、X、谷歌服务、Steam</td></tr>
   <tr><td>自定义规则</td><td>某个域名后缀、完整域名、域名关键字或 IP 段走节点、指定地区或节点、直连或拒绝，最多 200 条</td></tr>
+  <tr><td>应用分流</td><td>指定某个应用的全部流量走节点、指定地区或节点、直连或拒绝，最多 200 条。按进程名或安卓包名匹配，见下文</td></tr>
 </table></div>
-<p><b>匹配顺序：</b>局域网地址 → 自定义规则 → 广告 → 服务分组 → 境外 / 国内 → 其余。服务分组的先后是固定的，范围小的排在前面（例如 GitHub 在微软前面）。如果在配置里关闭 GitHub 分组，GitHub 会命中微软规则，跟随微软组的去向（默认直连），国内可能打不开。</p>
+<p><b>匹配顺序：</b>局域网地址 → 自定义规则 → 应用分流 → 广告 → 服务分组 → 境外 / 国内 → 其余。服务分组的先后是固定的，范围小的排在前面（例如 GitHub 在微软前面）。如果在配置里关闭 GitHub 分组，GitHub 会命中微软规则，跟随微软组的去向（默认直连），国内可能打不开。</p>
 <p><b>节点或配置被删除时：</b>配置里选的节点都不在了就退回全部节点；默认去向指向的地区或节点不在订阅里时退回节点选择；用户的配置被删除时，用户回到默认配置。订阅不会因此变成无效配置。</p>
+<h3 id="app-rules">应用分流怎么填</h3>
+<div class="table-wrap"><table>
+  <tr><th>系统</th><th>类型</th><th>到哪里查</th><th>例子</th></tr>
+  <tr><td>Windows</td><td>进程名</td><td>任务管理器 →「详细信息」→「名称」列</td><td><code>WeChat.exe</code></td></tr>
+  <tr><td>macOS</td><td>进程名</td><td>活动监视器 →「进程名称」列</td><td><code>WeChat</code></td></tr>
+  <tr><td>Linux</td><td>进程名</td><td><code>ps -eo comm</code>，或看程序文件的实际名称</td><td><code>curl</code></td></tr>
+  <tr><td>安卓</td><td>安卓包名</td><td>Google Play 应用页面网址里 <code>id=</code> 后面的部分</td><td><code>com.tencent.mm</code></td></tr>
+</table></div>
+<ul>
+  <li><b>要和实际名称完全一致，区分大小写。</b>写 <code>Perl</code> 匹配不到 <code>perl</code>。启动程序的名字可能只是链接：例如 <code>python3</code> 实际运行的是 <code>python3.12</code>，要填后者。应用升级后名字也可能变，例如新版微信在 Windows 上可能叫 <code>Weixin.exe</code>，以实际显示的为准。</li>
+  <li><b>同一个应用在不同系统上名字不同，</b>要在哪些系统上生效，就各加一条。</li>
+  <li><b>一个应用常有多个进程。</b>规则只匹配写上的那一个，例如浏览器的辅助进程可能要单独加一条。</li>
+  <li><b>优先级：</b>自定义规则排在前面。比如「微信 → 直连」和「<code>example.com</code> → 走节点」同时存在时，微信访问 <code>example.com</code> 会走节点。应用规则又排在广告前面，所以被指定去向的应用不再经过广告拦截。</li>
+  <li><b>不改变 DNS：</b>应用规则只决定连接走哪里，域名仍按原来的 DNS 策略解析。</li>
+</ul>
 <div class="warn"><b>几个限制：</b>
 <ul style="margin:6px 0 0">
   <li><b>指定节点不是访问控制。</b>它只决定订阅里出现哪些节点，账号在所有节点上都有效：更新订阅前，旧配置还能连上已经去掉的节点；知道节点地址的人也能手动连接。</li>
   <li><b>用户在客户端手动选过的组不受影响。</b>客户端会记住用户自己的选择，优先于配置里的默认项。想让新的默认项生效，用户需要在客户端切换一次或重新导入。</li>
   <li><b>Shadowrocket 等通用链接只有节点列表。</b>配置里只有「节点」对它们生效，分流规则由 App 自己决定。</li>
+  <li><b>应用分流不支持 iPhone 和 iPad。</b>iOS 上客户端拿不到发起连接的应用，这些规则不起作用，流量按后面的规则走。</li>
   <li><b>sing-box 没有可切换的拦截出站。</b>「拒绝」和广告拦截在 sing-box 里是固定的，用户不能改；Clash 的「🛑 广告拦截」组可以切换。</li>
 </ul></div>
 <p><b>命令行：</b><code>sudo sbm profile list</code> 查看全部配置，<code>sudo sbm profile show 配置名</code> 查看内容，<code>sudo sbm profile apply 配置名 用户1 用户2</code> 应用到用户。新建和修改配置请用控制台。配置保存在 <code>/etc/sbm/profiles.json</code>，会随每天的备份一起备份。</p>

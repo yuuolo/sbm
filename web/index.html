@@ -716,6 +716,11 @@ tbody tr:hover td { background: var(--surface-2); }
       <div class="cfg-meta" style="margin:0 0 8px">按顺序最先匹配（排在广告和服务组前面，只有局域网地址比它们优先）。域名后缀 <code>example.com</code> 同时匹配它和它的所有子域名。</div>
       <div id="peRules"></div>
       <button type="button" class="btn sm" id="peAddRule"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加规则</button>
+
+      <div class="sec-title">应用分流</div>
+      <div class="cfg-meta" style="margin:0 0 8px">指定某个应用的全部流量怎么走，排在自定义规则之后、广告和服务分组之前。<b>进程名</b>对 Windows、macOS、Linux 生效，例如 <code>WeChat.exe</code>；<b>安卓包名</b>对安卓生效，例如 <code>com.tencent.mm</code>。同一个应用要在多个系统上生效，就各加一条。iPhone、iPad 和 Shadowrocket 不支持。</div>
+      <div id="peApps"></div>
+      <button type="button" class="btn sm" id="peAddApp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加应用</button>
     </div>
     <div class="modal-foot">
       <button type="button" class="btn ghost" id="pePreview" style="margin-right:auto">预览</button>
@@ -1681,6 +1686,7 @@ function profileSummary(p) {
   if (p.mode === "rule") parts.push(`${Object.values(p.services).filter((s) => s.enabled).length} 个服务组`);
   parts.push(p.ads ? "拦截广告" : "不拦截广告");
   if (p.custom_rules.length) parts.push(`${p.custom_rules.length} 条自定义规则`);
+  if ((p.app_rules || []).length) parts.push(`${p.app_rules.length} 条应用规则`);
   return parts.join(" · ");
 }
 
@@ -1778,17 +1784,33 @@ function setPeMode(mode) {
     : "除局域网地址和自定义规则外，所有流量都走节点，访问国内网站也会绕到境外。";
 }
 
-function addRuleRow(rule) {
+const APP_PLACEHOLDER = { process_name: "例如 WeChat.exe", package_name: "例如 com.tencent.mm" };
+
+function ruleRow(box, types, rule, placeholder) {
   const row = document.createElement("div");
   row.className = "rule-row";
-  row.innerHTML = `<select class="sel" data-f="type">${Object.entries(prfInfo.catalog.rule_types).map(([v, t]) =>
+  row.innerHTML = `<select class="sel" data-f="type">${Object.entries(types).map(([v, t]) =>
       `<option value="${esc(v)}" ${v === rule.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
-    <input data-f="value" maxlength="253" placeholder="例如 example.com" value="${esc(rule.value)}">
+    <input data-f="value" maxlength="253" placeholder="${esc(placeholder)}" value="${esc(rule.value)}">
     <select class="sel" data-f="target" data-choice="rule" data-want="${esc(rule.target)}"></select>
     <button type="button" class="btn sm ghost danger" data-del>删除</button>`;
-  $("#peRules").appendChild(row);
+  $(box).appendChild(row);
   return row;
 }
+const addRuleRow = (rule) => ruleRow("#peRules", prfInfo.catalog.rule_types, rule, "例如 example.com");
+const addAppRow = (rule) => ruleRow("#peApps", prfInfo.catalog.app_rule_types, rule, APP_PLACEHOLDER[rule.type]);
+
+// 新加的一行要马上填好去向下拉框，并把光标放到输入框
+function focusNewRow(row) {
+  const sel = row.querySelector("select[data-choice]");
+  sel.innerHTML = choiceOptions("rule", editorNodes());
+  sel.value = sel.dataset.want;
+  row.querySelector("input").focus();
+}
+
+const collectRows = (box) => [...document.querySelectorAll(`${box} .rule-row`)]
+  .map((row) => ({ type: row.querySelector('[data-f="type"]').value, value: row.querySelector('[data-f="value"]').value.trim(), target: row.querySelector('[data-f="target"]').value }))
+  .filter((r) => r.value);  // 没填内容的行直接忽略
 
 function openEditor(p, id) {
   const c = prfInfo.catalog;
@@ -1809,6 +1831,8 @@ function openEditor(p, id) {
   }).join("");
   $("#peRules").innerHTML = "";
   p.custom_rules.forEach(addRuleRow);
+  $("#peApps").innerHTML = "";
+  (p.app_rules || []).forEach(addAppRow);
   refreshChoices();
   openModal("#prfEdit");
   $("#prfForm").scrollTop = 0;
@@ -1830,10 +1854,8 @@ function collectProfile() {
     main: $("#peMain").value,
     ads: $("#peAds").checked,
     services,
-    // 没填内容的行直接忽略
-    custom_rules: [...document.querySelectorAll("#peRules .rule-row")]
-      .map((row) => ({ type: row.querySelector('[data-f="type"]').value, value: row.querySelector('[data-f="value"]').value.trim(), target: row.querySelector('[data-f="target"]').value }))
-      .filter((r) => r.value),
+    custom_rules: collectRows("#peRules"),
+    app_rules: collectRows("#peApps"),
   };
 }
 
@@ -1844,15 +1866,11 @@ $("#prfForm").addEventListener("change", (e) => {
   if (t.name === "peNodes") $("#peNodeBox").hidden = t.value !== "some";
   if (t.name === "peNodes" || t.closest("#peNodeList")) refreshChoices();
   if (t.dataset.svc) t.closest(".svc").querySelector("select").disabled = !t.checked;
+  if (t.dataset.f === "type" && t.closest("#peApps")) t.closest(".rule-row").querySelector("input").placeholder = APP_PLACEHOLDER[t.value];
 });
-$("#peAddRule").onclick = () => {
-  const row = addRuleRow({ type: "domain_suffix", value: "", target: "proxy" });
-  const sel = row.querySelector("select[data-choice]");
-  sel.innerHTML = choiceOptions("rule", editorNodes());
-  sel.value = sel.dataset.want;
-  row.querySelector("input").focus();
-};
-$("#peRules").addEventListener("click", (e) => { if (e.target.closest("[data-del]")) e.target.closest(".rule-row").remove(); });
+$("#peAddRule").onclick = () => focusNewRow(addRuleRow({ type: "domain_suffix", value: "", target: "proxy" }));
+$("#peAddApp").onclick = () => focusNewRow(addAppRow({ type: "process_name", value: "", target: "direct" }));
+["#peRules", "#peApps"].forEach((box) => $(box).addEventListener("click", (e) => { if (e.target.closest("[data-del]")) e.target.closest(".rule-row").remove(); }));
 $("#pePreview").onclick = async () => {
   try {
     const name = $("#peName").value.trim();
