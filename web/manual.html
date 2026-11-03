@@ -96,6 +96,8 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <a href="#traffic">流量统计</a>
   <a href="#nodes">3. 节点管理</a>
   <a class="sub" href="#deploy">一键部署新服务器</a>
+  <a class="sub" href="#kernel">节点内核：sing-box 与 Prism</a>
+  <a class="sub" href="#nat">NAT 机器（端口映射）</a>
   <a class="sub" href="#attach">接入已有节点</a>
   <a class="sub" href="#status">状态卡片怎么看</a>
   <a class="sub" href="#upgrade">升级 sing-box</a>
@@ -320,34 +322,64 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
 <ol>
   <li>在服务商控制台的<b>安全组/防火墙</b>里放行 SSH 端口和节点端口（默认 TCP 443）。</li>
   <li>控制台 → 节点 → <b>添加节点</b> → 「一键部署新服务器」。复制第 1 步显示的<b>授权命令</b>，用 root 登录新服务器运行一次。它只添加一把公钥，并限制只能从订阅服务器登录。</li>
-  <li>填写节点名称（显示在用户客户端里，如 <code>HK-01</code>）、服务器 IP、SSH 端口、节点域名前缀，并在下拉框选择主域名（如 <code>hk1</code> + <code>.{{BASE_DOMAIN}}</code>）。主域名在「域名管理」里增删，见第 4 节。</li>
-  <li>点开始，在日志窗口里看进度：设置 DNS → 申请证书 → 安装 sing-box → 写入配置 → 验证。</li>
+  <li>填写节点名称（显示在用户客户端里，如 <code>HK-01</code>）、服务器 IP、SSH 端口、节点域名前缀，并在下拉框选择主域名（如 <code>hk1</code> + <code>.{{BASE_DOMAIN}}</code>）。主域名在「域名管理」里增删，见第 4 节。再选择<a href="#kernel">节点内核</a>，NAT 机器还要填<a href="#nat">内部端口</a>。</li>
+  <li>点开始，在日志窗口里看进度：设置 DNS → 申请证书 → 安装内核 → 写入配置 → 验证。</li>
 </ol>
 <p>完成后节点自动加入所有人的订阅，现有节点不受影响。部署失败可以直接重试，已经完成的步骤会自动跳过。</p>
 <div class="note"><b>最后一步提示「TLS 验证未通过」不一定是失败：</b>订阅服务器在国内，直连境外节点可能被干扰。用客户端实际连一下确认即可。</div>
+
+<h3 id="kernel">节点内核：sing-box 与 Prism</h3>
+<p>部署时可以选择节点运行哪个内核。对客户端都是 AnyTLS，订阅内容、用户、账号池、流量统计都通用，同一份订阅里可以混用两种节点。</p>
+<div class="table-wrap"><table>
+  <tr><th></th><th>sing-box（官方）</th><th>Prism（自研 prism-node-server）</th></tr>
+  <tr><td>账号变化时</td><td>重启节点，所有连接断开几秒（账号池让这种情况只在维护时发生）</td><td>热加载，连接不断；被删除或改了密码的账号在推送时立刻断开</td></tr>
+  <tr><td>证书续期后</td><td>重启节点</td><td>热加载，连接不断</td></tr>
+  <tr><td>流量统计</td><td>iptables 计数，需要节点支持 iptables mangle</td><td>内核自带，不用 iptables，容器类 VPS 也能用</td></tr>
+  <tr><td>统计口径</td><td>节点到目标网站的 IP 包字节数</td><td>节点转发的应用数据字节数，不含 TCP/IP 包头，数值略小</td></tr>
+  <tr><td>升级和重启</td><td>都会断开几秒</td><td>也会断开几秒；重启后内核计数归零，sbm 已按增量处理，不会丢失或重复</td></tr>
+  <tr><td>配置和目录</td><td><code>/etc/sing-box/</code>，服务 <code>sing-box</code></td><td><code>/etc/prism-node-server/</code>，服务 <code>prism-node-server</code></td></tr>
+</table></div>
+<ul>
+  <li><b>安装包来源：</b><a href="https://github.com/yuuolo/prism-node-server/releases">prism-node-server 的 GitHub Release</a>。订阅服务器下载一次，按 Release 里的 <code>SHA256SUMS</code> 校验后缓存在 <code>/etc/sbm/bin/prism/</code>，再推送给节点，所以节点不需要能连上 GitHub。订阅服务器直连 GitHub 下载失败时，会让现有节点代为下载。</li>
+  <li><b>运行账号：</b>systemd 229 及以上（Ubuntu 16.04、Debian 9 起）用专用账号 <code>prism-node</code> 运行；CentOS 7 这类旧系统只能以 root 运行。</li>
+  <li><b>支持的架构：</b>x86_64 和 aarch64。程序是静态链接的，不依赖系统库。</li>
+  <li><b>本机控制接口：</b>Prism 在节点的 <code>127.0.0.1:9550</code> 提供统计和重新加载接口，只有节点本机能访问；用户不能经代理访问节点本机。</li>
+  <li><b>目前的限制：</b>只有「一键部署」能选择 Prism。已有节点不能在控制台里直接换内核，要换的话，先用新服务器部署 Prism 节点，再移除旧节点。</li>
+</ul>
+
+<h3 id="nat">NAT 机器（端口映射）</h3>
+<p>有些便宜的 VPS 没有独立公网端口，服务商给的是「公网端口 → 内部端口」的映射。这时：</p>
+<ul>
+  <li><b>SSH 端口</b>填服务商给的公网 SSH 端口。</li>
+  <li><b>节点端口</b>填客户端要连接的公网端口，订阅里下发的就是它。</li>
+  <li><b>内部端口</b>填映射到的端口，节点程序监听的是它。没有映射就留空。</li>
+</ul>
+<p>例如服务商给的是公网 38101 映射到内部 443：节点端口填 <code>38101</code>，内部端口填 <code>443</code>。节点卡片会显示 <code>域名:38101（内部 443）</code>。部署时系统防火墙放行的是内部端口；证书用 DNS 验证，不需要 80 或 443 能从外面访问。</p>
 
 <h3 id="attach">接入已有节点</h3>
 <p>服务器上已经自己配好了 sing-box 和 AnyTLS 入站时使用。同样先运行授权命令，然后在「接入已有 sing-box」里填写信息。<b>节点上原有的 AnyTLS 用户会被替换</b>成控制台的账号列表。</p>
 
 <h3>移除节点</h3>
-<p>节点卡片上的 <b>移除</b> 只是让它不再出现在订阅中、不再受管理。服务器上的 sing-box、DNS 解析和证书都保持原样，需要的话请自行清理或退订服务器。最后一个节点不能移除。</p>
+<p>节点卡片上的 <b>移除</b> 只是让它不再出现在订阅中、不再受管理。服务器上的内核、DNS 解析和证书都保持原样，需要的话请自行清理或退订服务器。最后一个节点不能移除。</p>
 
 <h3 id="status">状态卡片怎么看</h3>
 <div class="table-wrap"><table>
   <tr><th>项目</th><th>含义</th></tr>
-  <tr><td>运行中 / 已停止 / 无法连接</td><td>sing-box 服务状态；「无法连接」表示订阅服务器 SSH 不上这台机器</td></tr>
+  <tr><td>运行中 / 已停止 / 无法连接</td><td>节点内核的服务状态；「无法连接」表示订阅服务器 SSH 不上这台机器</td></tr>
   <tr><td>待同步</td><td>上次推送账号失败（比如当时宕机），部分新用户可能连不上这个节点。下次维护或点「同步节点」会重试</td></tr>
   <tr><td>部署 / 接入</td><td>部署：由本系统安装，证书由订阅服务器续期；接入：外部配置，证书由节点自己管理</td></tr>
+  <tr><td>Prism</td><td>这个节点运行自研内核，见<a href="#kernel">节点内核</a>；没有这个标记的是 sing-box</td></tr>
   <tr><td>CPU 负载</td><td>最近 1 分钟平均负载 ÷ CPU 核数。100% 表示所有核满载，超过 100% 说明有任务在排队。鼠标悬停可看原始数值</td></tr>
   <tr><td>内存</td><td>实际占用（不含可随时释放的缓存）占总内存的比例</td></tr>
-  <tr><td>已运行 / 开机时长</td><td>sing-box 本次启动以来的时间 / 服务器本身开机以来的时间</td></tr>
+  <tr><td>已运行 / 开机时长</td><td>内核本次启动以来的时间 / 服务器本身开机以来的时间</td></tr>
 </table></div>
 <p>进度条颜色：绿色 &lt; 60%，黄色 60~85%，红色 &gt; 85%。长期红色说明该换更大的机器或增加节点分流。</p>
 
-<h3 id="upgrade">升级 sing-box</h3>
-<p>节点卡片显示黄色「可升级到 x.y.z」时，可以点卡片上的升级按钮，或点 <b>版本管理</b> 一次选择多个节点、选择目标版本（也能回退到旧版本）。</p>
+<h3 id="upgrade">升级内核</h3>
+<p>节点卡片显示黄色「可升级到 x.y.z」时，可以点卡片上的升级按钮，或点 <b>版本管理</b> 一次选择多个节点、选择目标版本（也能回退到旧版本）。有 Prism 节点时，弹窗顶部可以在 sing-box 和 Prism 之间切换，两种内核的版本号分开管理。</p>
 <ul>
-  <li>升级会自动识别安装方式（deb / rpm / 程序文件），从 sing-box 官方 GitHub 下载。</li>
+  <li>sing-box：自动识别安装方式（deb / rpm / 程序文件），节点从 sing-box 官方 GitHub 下载。</li>
+  <li>Prism：由订阅服务器推送校验过的安装包，节点不需要连 GitHub。</li>
   <li>升级前备份配置和旧程序；新版本校验配置失败或启动失败会<b>自动回滚</b>。</li>
   <li>每个节点升级时会重启一次，建议在用户少的时候操作。</li>
 </ul>
@@ -453,6 +485,7 @@ sudo sbm sync                              <span class="c"># 立即维护（只�
 sudo sbm node list
 sudo sbm node pubkey                       <span class="c"># 授权命令</span>
 sudo sbm node deploy HK-01 --host 203.0.113.10 --sub hk1 [--zone example.com] [--ssh-port 22] [--port 443]
+                                           <span class="c"># 可选 --kernel prism 用自研内核；NAT 机器加 --listen-port 443，--port 填公网端口</span>
 sudo sbm node attach HK-01 --host 203.0.113.20 [--inbound-tag anytls-in]
 sudo sbm node del HK-01
 sudo sbm node versions                     <span class="c"># 各节点版本与最新版</span>

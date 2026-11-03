@@ -99,18 +99,55 @@ def load_users():
     return users
 
 
+# ---------- 节点内核 ----------
+# 节点可以运行官方 sing-box，也可以运行自研的 Prism（prism-node-server，配置格式兼容 sing-box）。
+# 对客户端都是 AnyTLS，订阅内容与内核无关。旧节点没有 kernel 字段，都是 sing-box。
+
+DEFAULT_KERNEL = "sing-box"
+KERNELS = {
+    "sing-box": {
+        "label": "sing-box", "repo": "SagerNet/sing-box", "service": "sing-box",
+        "comm": "sing-box", "dir": "/etc/sing-box",
+        "version": "sing-box version 2>/dev/null | awk 'NR==1{print $3}'",
+    },
+    "prism": {
+        "label": "Prism", "repo": "yuuolo/prism-node-server", "service": "prism-node-server",
+        # ss 显示的进程名最长 15 个字符
+        "comm": "prism-node-serv", "dir": "/etc/prism-node-server",
+        "version": "prism-node-server version 2>/dev/null | awk '{print $2}'",
+    },
+}
+
+
+def kernel_of(node):
+    return KERNELS[node.get("kernel", DEFAULT_KERNEL)]
+
+
+def is_prism(node):
+    return node.get("kernel") == "prism"
+
+
 # ---------- 节点 ----------
 
-def ssh(node, cmd, stdin=""):
-    # stdin 默认给空串：否则 ssh 会吞掉调用方（例如管道脚本）的标准输入
-    args = [
+def ssh_args(node, cmd):
+    return [
         "ssh", "-i", node["ssh_key"], "-p", str(node.get("ssh_port", 22)),
         "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
         # 新节点第一次连接时自动记下主机密钥；之后密钥变了仍会拒绝连接
         "-o", "StrictHostKeyChecking=accept-new",
         f"{node['ssh_user']}@{node['host']}", cmd,
     ]
-    return subprocess.run(args, input=stdin, capture_output=True, text=True)
+
+
+def ssh(node, cmd, stdin=""):
+    # stdin 默认给空串：否则 ssh 会吞掉调用方（例如管道脚本）的标准输入
+    return subprocess.run(ssh_args(node, cmd), input=stdin, capture_output=True, text=True)
+
+
+def ssh_push(node, cmd, data):
+    """和 ssh 一样，但标准输入是二进制内容（安装包）。"""
+    r = subprocess.run(ssh_args(node, cmd), input=data, capture_output=True)
+    return subprocess.CompletedProcess(r.args, r.returncode, r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace"))
 
 
 PUSH_SCRIPT = r"""
@@ -128,6 +165,29 @@ sleep 2
 if ! systemctl is-active --quiet sing-box; then
     cp -a "$p.sbm-$ts" "$p"
     systemctl restart sing-box
+    echo ROLLBACK
+    exit 1
+fi
+ls -1t "$p".sbm-* | tail -n +6 | xargs -r rm -f
+echo APPLIED
+"""
+
+# Prism 热加载：用户和证书即时生效，已有连接不断，被删除或改了密码的账号立刻断开
+PRISM_PUSH_SCRIPT = r"""
+set -e
+p={path}
+ts=$(date +%Y%m%d-%H%M%S)
+trap 'rm -f "$p.new"' EXIT
+umask 077
+cat > "$p.new"
+chown --reference="$p" "$p.new"
+prism-node-server check -c "$p.new" >/dev/null
+if cmp -s "$p" "$p.new"; then echo UNCHANGED; exit 0; fi
+cp -a "$p" "$p.sbm-$ts"
+mv "$p.new" "$p"
+if ! prism-node-server reload -c "$p" >/dev/null; then
+    cp -a "$p.sbm-$ts" "$p"
+    prism-node-server reload -c "$p" >/dev/null || true
     echo ROLLBACK
     exit 1
 fi
@@ -212,7 +272,8 @@ def install_stats(node, cred_list, marks):
 
 def push_node(node, cred_list, marks):
     """把账号写进节点入站的 users，并生成按账号统计流量的出站与规则。
-    内容没变就不动；变了才校验、重启，启动失败自动回滚。"""
+    内容没变就不动；变了才校验、重启，启动失败自动回滚。
+    Prism 内置按用户统计，不需要统计出站和 iptables 规则；账号变化时热加载，不重启。"""
     r = ssh(node, f"cat {shlex.quote(node['config_path'])}")
     if r.returncode != 0:
         return False, f"读取配置失败: {r.stderr.strip()}"
@@ -221,13 +282,17 @@ def push_node(node, cred_list, marks):
     if inbound is None:
         return False, f"配置中没有 tag 为 {node['inbound_tag']} 的入站"
     inbound["users"] = cred_list
-    apply_stats_routing(cfg, cred_list, marks)
-    try:
-        install_stats(node, cred_list, marks)
-    except SbmError as e:
-        return False, str(e)
+    if is_prism(node):
+        script = PRISM_PUSH_SCRIPT
+    else:
+        script = PUSH_SCRIPT
+        apply_stats_routing(cfg, cred_list, marks)
+        try:
+            install_stats(node, cred_list, marks)
+        except SbmError as e:
+            return False, str(e)
     new = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
-    r = ssh(node, PUSH_SCRIPT.format(path=shlex.quote(node["config_path"])), stdin=new)
+    r = ssh(node, script.format(path=shlex.quote(node["config_path"])), stdin=new)
     out = (r.stdout + r.stderr).strip()
     if r.returncode != 0:
         return False, out
@@ -497,24 +562,24 @@ def issue_cert(fqdn, log, token_file):
     log(f"  证书有效期至 {end}")
 
 
-def cert_dir(fqdn):
-    return f"/etc/sing-box/certs/{fqdn}"
+def cert_dir(node):
+    return f"{kernel_of(node)['dir']}/certs/{node['server']}"
 
 
 def push_cert(node, log):
     """证书只在订阅服务器上申请和续期（Cloudflare Token 不下发到节点），续期后推送过去。"""
     fqdn = node["server"]
-    d = shlex.quote(cert_dir(fqdn))
+    d = shlex.quote(cert_dir(node))
     for name, mode in (("fullchain.pem", "644"), ("privkey.pem", "600")):
         with open(f"/etc/letsencrypt/live/{fqdn}/{name}", encoding="utf-8") as f:
             pem = f.read()
         r = ssh(node, f"mkdir -p {d} && umask 077 && cat > {d}/{name}.new && chmod {mode} {d}/{name}.new && mv {d}/{name}.new {d}/{name}", stdin=pem)
         if r.returncode != 0:
             raise SbmError(f"上传 {name} 失败: {r.stderr.strip()}")
-    # 如果 sing-box 服务以非 root 用户运行，私钥要归它所有
+    # 如果服务以非 root 用户运行，私钥要归它所有
     # （不用 systemctl show --value：CentOS 7 的 systemd 219 不支持）
-    ssh(node, f'u=$(systemctl show -p User sing-box | cut -d= -f2-); [ -n "$u" ] && chown -R "$u" {d} || true')
-    log(f"  证书已上传到 {cert_dir(fqdn)}")
+    ssh(node, f'u=$(systemctl show -p User {kernel_of(node)["service"]} | cut -d= -f2-); [ -n "$u" ] && chown -R "$u" {d} || true')
+    log(f"  证书已上传到 {cert_dir(node)}")
 
 
 INSTALL_SCRIPT = r"""
@@ -553,6 +618,85 @@ systemctl is-active --quiet sing-box || { journalctl -u sing-box -n 15 --no-page
 echo "sing-box 运行中"
 """
 
+# 第一次部署和后续升级共用：新版本先校验现有配置，重启失败自动换回旧版本
+PRISM_INSTALL_SCRIPT = r"""
+set -e
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/pkg"
+echo "{sha}  $tmp/pkg" | sha256sum -c --quiet -
+tar -xzf "$tmp/pkg" -C "$tmp" prism-node-server
+new="$tmp/prism-node-server"; bin=/usr/local/bin/prism-node-server; cfg=/etc/prism-node-server/config.json
+"$new" version >/dev/null || {{ echo "安装包无法在这台服务器上运行"; exit 1; }}
+cur=""
+if [ -x "$bin" ]; then cur=$("$bin" version | awk '{{print $2}}'); cp -a "$bin" "$tmp/prev"; fi
+if [ "$cur" = "{ver}" ]; then echo "已是 {ver}，无需升级"; exit 0; fi
+if [ -s "$cfg" ]; then "$new" check -c "$cfg" >/dev/null || {{ echo "新版本无法通过当前配置的校验"; exit 1; }}; fi
+install -m 755 "$new" "$bin"
+if ! systemctl is-active --quiet prism-node-server; then echo "已安装 $("$bin" version)"; exit 0; fi
+systemctl restart prism-node-server
+sleep 2
+if ! systemctl is-active --quiet prism-node-server || ! "$bin" stats -c "$cfg" >/dev/null 2>&1; then
+    journalctl -u prism-node-server -n 10 --no-pager
+    install -m 755 "$tmp/prev" "$bin"
+    systemctl restart prism-node-server
+    echo "已回滚到 $cur"
+    exit 1
+fi
+echo "升级完成: $cur → {ver}"
+"""
+
+# systemd 229 起才有 AmbientCapabilities，这时用专用账号运行；旧系统（如 CentOS 7）只能用 root
+PRISM_SERVICE_SCRIPT = r"""
+set -e
+sv=$(systemctl --version | awk 'NR==1{print $2}')
+user=""
+if [ "$sv" -ge 229 ]; then
+    id prism-node >/dev/null 2>&1 || useradd -r -M -s "$(command -v nologin || echo /bin/false)" prism-node
+    user="User=prism-node"
+fi
+mkdir -p /etc/prism-node-server
+chmod 755 /etc/prism-node-server
+cat > /etc/systemd/system/prism-node-server.service <<EOF
+[Unit]
+Description=prism-node-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+$user
+ExecStart=/usr/local/bin/prism-node-server run -c /etc/prism-node-server/config.json
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable prism-node-server >/dev/null 2>&1
+echo "服务已配置（systemd $sv，${user:-以 root 运行}）"
+"""
+
+PRISM_START_SCRIPT = r"""
+set -e
+p=/etc/prism-node-server/config.json
+trap 'rm -f "$p.new"' EXIT
+umask 077
+cat > "$p.new"
+prism-node-server check -c "$p.new"
+if [ -s "$p" ] && ! cmp -s "$p" "$p.new"; then cp -a "$p" "$p.sbm-pre-$(date +%Y%m%d-%H%M%S)"; fi
+mv "$p.new" "$p"
+u=$(systemctl show -p User prism-node-server | cut -d= -f2-)
+if [ -n "$u" ]; then chown "$u" "$p"; fi
+systemctl restart prism-node-server
+sleep 2
+systemctl is-active --quiet prism-node-server && prism-node-server stats -c "$p" >/dev/null 2>&1 || { journalctl -u prism-node-server -n 15 --no-pager; exit 1; }
+echo "prism-node-server 运行中"
+"""
+
 FIREWALL_SCRIPT = r"""
 port={port}
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
@@ -565,20 +709,27 @@ fi
 """
 
 
+def listen_port(node):
+    """节点进程实际监听的端口。node["port"] 是客户端连接的公网端口，NAT 机器上两者可能不同。"""
+    return node.get("listen_port", node["port"])
+
+
 def node_config(node, cred_list, marks):
     inbound = {
         "type": "anytls",
         "tag": node["inbound_tag"],
         "listen": "::",
-        "listen_port": node["port"],
+        "listen_port": listen_port(node),
         "users": cred_list,
         "tls": {
             "enabled": True,
             "server_name": node["server"],
-            "certificate_path": f"{cert_dir(node['server'])}/fullchain.pem",
-            "key_path": f"{cert_dir(node['server'])}/privkey.pem",
+            "certificate_path": f"{cert_dir(node)}/fullchain.pem",
+            "key_path": f"{cert_dir(node)}/privkey.pem",
         },
     }
+    if is_prism(node):
+        return {"log": {"level": "info"}, "inbounds": [inbound]}  # 流量统计内置，不需要出站和路由规则
     cfg = {
         "log": {"level": "info"},
         "inbounds": [inbound],
@@ -609,14 +760,18 @@ def verify_tls(node, log):
         log("  ⚠ 从订阅服务器验证 TLS 未通过（国内直连境外可能被干扰），请用客户端实际连接确认")
 
 
-def deploy_node(conf, users, name, host, ssh_port, sub, port, zone=None, log=print):
-    """在全新服务器上部署 AnyTLS 节点：DNS → 证书 → 安装 sing-box → 写配置 → 加入订阅。
-    zone 为域名管理里的某个主域名，不指定时用默认域名。"""
+def deploy_node(conf, users, name, host, ssh_port, sub, port, zone=None, log=print, kernel=DEFAULT_KERNEL, listen=None):
+    """在全新服务器上部署 AnyTLS 节点：DNS → 证书 → 安装内核 → 写配置 → 加入订阅。
+    zone 为域名管理里的某个主域名，不指定时用默认域名。
+    port 是客户端连接的公网端口；listen 是服务器内部监听的端口，NAT 机器才需要指定。"""
     ssh_port, port = int(ssh_port), int(port)
+    listen = int(listen or port)
     check_node_args(conf, name, host, ssh_port)
+    if kernel not in KERNELS:
+        raise SbmError(f"不支持的内核: {kernel}")
     if not SUB_RE.match(sub or ""):
         raise SbmError("子域名前缀只能用小写字母、数字和 -")
-    if not 1 <= port <= 65535:
+    if not (1 <= port <= 65535 and 1 <= listen <= 65535):
         raise SbmError("节点端口无效")
     zone = zone or base_domain(conf)
     token_file = get_domain(conf, zone)["token_file"]
@@ -633,12 +788,19 @@ def deploy_node(conf, users, name, host, ssh_port, sub, port, zone=None, log=pri
         "config_path": "/etc/sing-box/config.json", "inbound_tag": "anytls-in",
         "server": fqdn, "port": port, "sni": fqdn, "managed": True, "zone": zone,
     }
+    if kernel != DEFAULT_KERNEL:
+        node["kernel"] = kernel
+        node["config_path"] = f"{kernel_of(node)['dir']}/config.json"
+    if listen != port:
+        node["listen_port"] = listen
+    label = kernel_of(node)["label"]
+    version = releases(kernel=kernel)["latest"] if is_prism(node) else None  # 先确认有版本可装，再动 DNS 和证书
 
     log("[1/7] 检查 SSH 连接")
     check_root_ssh(node, log)
-    busy = ssh(node, f"ss -Htlnp 'sport = :{port}'").stdout.strip()
-    if busy and "sing-box" not in busy:
-        raise SbmError(f"端口 {port} 已被其他程序占用:\n{busy}")
+    busy = ssh(node, f"ss -Htlnp 'sport = :{listen}'").stdout.strip()
+    if busy and kernel_of(node)["comm"] not in busy:
+        raise SbmError(f"端口 {listen} 已被其他程序占用:\n{busy}")
 
     log(f"[2/7] 设置 DNS 解析 {fqdn}")
     cf_upsert_a(zone, fqdn, resolve_ipv4(host), log, token_file)
@@ -646,30 +808,42 @@ def deploy_node(conf, users, name, host, ssh_port, sub, port, zone=None, log=pri
     log("[3/7] 申请 TLS 证书（DNS 验证，约 1 分钟）")
     issue_cert(fqdn, log, token_file)
 
-    log("[4/7] 安装 sing-box")
-    log("  " + ssh_ok(node, INSTALL_SCRIPT, "安装 sing-box").splitlines()[-1])
+    log(f"[4/7] 安装 {label}")
+    if is_prism(node):
+        for line in install_prism(conf, node, version, log):
+            log("  " + line)
+        log("  " + ssh_ok(node, PRISM_SERVICE_SCRIPT, "配置服务").splitlines()[-1])
+    else:
+        log("  " + ssh_ok(node, INSTALL_SCRIPT, "安装 sing-box").splitlines()[-1])
 
     log("[5/7] 上传证书")
     push_cert(node, log)
 
     log("[6/7] 写入配置并启动")
-    r = ssh(node, START_SCRIPT, stdin=json.dumps(node_config(node, cred_list, creds["marks"]), indent=2, ensure_ascii=False) + "\n")
+    r = ssh(node, PRISM_START_SCRIPT if is_prism(node) else START_SCRIPT,
+            stdin=json.dumps(node_config(node, cred_list, creds["marks"]), indent=2, ensure_ascii=False) + "\n")
     if r.returncode != 0:
-        raise SbmError("启动 sing-box 失败:\n" + (r.stdout + r.stderr).strip()[-1500:])
+        raise SbmError(f"启动 {label} 失败:\n" + (r.stdout + r.stderr).strip()[-1500:])
     for line in r.stdout.strip().splitlines():
         log("  " + line)
-    log("  " + ssh_ok(node, FIREWALL_SCRIPT.format(port=port), "配置防火墙").splitlines()[-1])
-    # 防火墙重载会清掉计数规则，所以放在它之后安装
-    install_stats(node, cred_list, creds["marks"])
-    log("  已启用流量统计")
+    log("  " + ssh_ok(node, FIREWALL_SCRIPT.format(port=listen), "配置防火墙").splitlines()[-1])
+    if is_prism(node):
+        log("  流量统计由内核提供，不需要 iptables 规则")
+    else:
+        # 防火墙重载会清掉计数规则，所以放在它之后安装
+        install_stats(node, cred_list, creds["marks"])
+        log("  已启用流量统计")
 
     log("[7/7] 验证并加入订阅")
     verify_tls(node, log)
     conf["nodes"].append(node)
     save_conf(conf)
     build_subs(conf, users)
-    log(f"完成：节点 {name}（{fqdn}:{port}）已加入所有用户的订阅")
-    log(f"提醒：如果云服务商有安全组，请放行 TCP {port}")
+    log(f"完成：节点 {name}（{fqdn}:{port}，{label}）已加入所有用户的订阅")
+    if listen != port:
+        log(f"提醒：请确认服务商已把公网 TCP {port} 映射到服务器内部的 {listen}")
+    else:
+        log(f"提醒：如果云服务商有安全组，请放行 TCP {port}")
 
 
 def attach_node(conf, users, name, host, ssh_port, inbound_tag="anytls-in",
@@ -728,43 +902,112 @@ def remove_node(conf, users, name, log=print):
     log(f"节点 {name} 已从订阅中移除（服务器本身未做改动）")
 
 
-# ---------- sing-box 版本 ----------
+# ---------- 内核版本 ----------
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$")
 STABLE_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 RELEASE_CACHE = f"{ETC}/.releases.json"
 RELEASE_TTL = 1800  # GitHub 未认证 API 每小时只有 60 次
+PRISM_CACHE = f"{ETC}/bin/prism"  # 备份不包含 etc/sbm/bin
+PRISM_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 
 
-def _github(path):
-    req = urllib.request.Request("https://api.github.com/repos/SagerNet/sing-box" + path,
+def _github(repo, path):
+    req = urllib.request.Request(f"https://api.github.com/repos/{repo}" + path,
                                  headers={"Accept": "application/vnd.github+json", "User-Agent": "sbm"})
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.load(resp)
 
 
-def releases(refresh=False):
+def releases(refresh=False, kernel=DEFAULT_KERNEL):
     """返回 {"latest": "1.14.3", "stable": [最近的正式版...], "checked": 时间戳}，失败时用缓存。"""
-    cache = load(RELEASE_CACHE, {})
+    info = KERNELS[kernel]
+    cache_file = RELEASE_CACHE if kernel == DEFAULT_KERNEL else f"{ETC}/.releases-{kernel}.json"
+    cache = load(cache_file, {})
     if cache and not refresh and time.time() - cache.get("checked", 0) < RELEASE_TTL:
         return cache
     try:
-        latest = _github("/releases/latest")["tag_name"].lstrip("v")
+        latest = _github(info["repo"], "/releases/latest")["tag_name"].lstrip("v")
         # 完整的 releases 列表很大，从国内下载容易超时；tags 列表小得多
-        tags = [t["name"] for t in _github("/tags?per_page=60")]
+        tags = [t["name"] for t in _github(info["repo"], "/tags?per_page=60")]
         stable = sorted({tuple(map(int, m.groups())) for t in tags if (m := STABLE_RE.match(t))}, reverse=True)
         data = {"latest": latest, "stable": [".".join(map(str, v)) for v in stable[:10]], "checked": time.time()}
-        write_file(RELEASE_CACHE, json.dumps(data) + "\n", 0o600)
+        write_file(cache_file, json.dumps(data) + "\n", 0o600)
         return data
     except (OSError, ValueError, KeyError) as e:
         if cache:
             return dict(cache, stale=True)
-        raise SbmError(f"无法从 GitHub 获取 sing-box 版本信息: {e}")
+        if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+            raise SbmError(f"{info['label']}（{info['repo']}）在 GitHub 上还没有发布版本")
+        raise SbmError(f"无法从 GitHub 获取 {info['label']} 版本信息: {e}")
 
 
 def node_version(node):
-    r = ssh(node, "sing-box version 2>/dev/null | awk 'NR==1{print $3}'")
+    r = ssh(node, kernel_of(node)["version"])
     return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def fetch_url(conf, url):
+    """下载一个文件。订阅服务器在国内，直连 GitHub 下载常常失败，失败时让能连上的节点代为下载。"""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "sbm"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise SbmError(f"找不到 {url}")
+        err = e
+    except OSError as e:
+        err = e
+    for node in conf["nodes"]:
+        r = subprocess.run(ssh_args(node, f"curl -fsSL --retry 2 --max-time 120 {shlex.quote(url)}"),
+                           capture_output=True, stdin=subprocess.DEVNULL)
+        if r.returncode == 0 and r.stdout:
+            return r.stdout
+    raise SbmError(f"下载 {url} 失败: {err}")
+
+
+def prism_package(conf, version, arch, log):
+    """返回 Prism 安装包的 (内容, sha256)。订阅服务器下载并校验一次后缓存，由它推送给节点，
+    所以节点不需要能连上 GitHub。"""
+    name = f"prism-node-server-{version}-linux-{arch}.tar.gz"
+    d = f"{PRISM_CACHE}/{version}"
+    path, sums_path = f"{d}/{name}", f"{d}/SHA256SUMS"
+    cached = os.path.exists(path) and os.path.exists(sums_path)
+    if cached:
+        with open(path, "rb") as f:
+            data = f.read()
+        with open(sums_path, encoding="utf-8") as f:
+            sums = f.read()
+    else:
+        base = f"https://github.com/{KERNELS['prism']['repo']}/releases/download/v{version}"
+        log(f"  下载 {name}")
+        sums = fetch_url(conf, f"{base}/SHA256SUMS").decode()
+        data = fetch_url(conf, f"{base}/{name}")
+    want = next((p[0] for p in map(str.split, sums.splitlines()) if len(p) == 2 and p[1].lstrip("*") == name), None)
+    sha = hashlib.sha256(data).hexdigest()
+    if sha != want:
+        raise SbmError(f"{name} 的校验和不一致（期望 {want}，实际 {sha}）")
+    if not cached:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        with open(f"{path}.tmp", "wb") as f:
+            f.write(data)
+        os.replace(f"{path}.tmp", path)
+        write_private(sums_path, sums)
+    return data, sha
+
+
+def install_prism(conf, node, version, log=print):
+    """把指定版本的 Prism 推送到节点并安装；节点已在运行时会重启，失败自动回滚。返回节点输出的各行。"""
+    machine = ssh_ok(node, "uname -m", "读取服务器架构")
+    arch = PRISM_ARCH.get(machine)
+    if not arch:
+        raise SbmError(f"Prism 还没有 {machine} 架构的版本")
+    data, sha = prism_package(conf, version, arch, log)
+    r = ssh_push(node, PRISM_INSTALL_SCRIPT.format(sha=sha, ver=version), data)
+    if r.returncode != 0:
+        raise SbmError((r.stdout + r.stderr).strip()[-1500:])
+    return r.stdout.strip().splitlines()
 
 
 UPGRADE_SCRIPT = r"""
@@ -817,18 +1060,32 @@ echo "升级完成: $cur → $(sing-box version | awk 'NR==1{{print $3}}')"
 
 
 def upgrade_nodes(conf, names, version=None, log=print):
-    """逐个升级节点（每个节点会重启一次）。一个失败不影响其他节点，最后汇总。"""
-    version = version or releases()["latest"]
-    if not VERSION_RE.match(version):
+    """逐个升级节点（每个节点会重启一次）。一个失败不影响其他节点，最后汇总。
+    不指定版本时升到各自内核的最新正式版；指定版本时所选节点必须是同一种内核。"""
+    if version and not VERSION_RE.match(version):
         raise SbmError(f"版本号格式不对: {version}")
     targets = [n for n in conf["nodes"] if n["name"] in names]
     missing = set(names) - {n["name"] for n in targets}
     if missing:
         raise SbmError(f"节点不存在: {', '.join(sorted(missing))}")
+    kernels = {n.get("kernel", DEFAULT_KERNEL) for n in targets}
+    if version and len(kernels) > 1:
+        raise SbmError("所选节点的内核不同，不能升级到同一个版本，请分开升级")
+    latest = {k: version or releases(kernel=k)["latest"] for k in kernels}
     failed = []
     for i, node in enumerate(targets, 1):
-        log(f"[{i}/{len(targets)}] {node['name']} → {version}")
-        r = ssh(node, UPGRADE_SCRIPT.format(ver=version))
+        target = latest[node.get("kernel", DEFAULT_KERNEL)]
+        log(f"[{i}/{len(targets)}] {node['name']} → {kernel_of(node)['label']} {target}")
+        if is_prism(node):
+            try:
+                for line in install_prism(conf, node, target, log):
+                    log("  " + line)
+            except SbmError as e:
+                log(f"  {e}")
+                failed.append(node["name"])
+                log(f"  ✗ {node['name']} 升级失败")
+            continue
+        r = ssh(node, UPGRADE_SCRIPT.format(ver=target))
         for line in (r.stdout + r.stderr).strip().splitlines():
             log("  " + line)
         if r.returncode != 0:
@@ -836,16 +1093,20 @@ def upgrade_nodes(conf, names, version=None, log=print):
             log(f"  ✗ {node['name']} 升级失败")
     if failed:
         raise SbmError(f"以下节点升级失败: {', '.join(failed)}")
-    log(f"完成：{len(targets)} 个节点均为 {version}")
+    log(f"完成：{len(targets)} 个节点均为 {'、'.join(sorted(set(latest.values())))}")
 
 
 def cert_renewed(conf, domains, log=print):
-    """certbot 续期钩子：把续期后的证书推送到对应节点并重启 sing-box。"""
+    """certbot 续期钩子：把续期后的证书推送到对应节点，sing-box 重启，Prism 热加载（连接不断）。"""
     for node in conf["nodes"]:
         if node.get("managed") and node["server"] in domains:
             push_cert(node, log)
-            ssh_ok(node, "systemctl restart sing-box", "重启 sing-box")
-            log(f"[{node['name']}] 已重启 sing-box")
+            if is_prism(node):
+                ssh_ok(node, f"prism-node-server reload -c {shlex.quote(node['config_path'])}", "重新加载 Prism")
+                log(f"[{node['name']}] Prism 已加载新证书")
+            else:
+                ssh_ok(node, "systemctl restart sing-box", "重启 sing-box")
+                log(f"[{node['name']}] 已重启 sing-box")
 
 
 # ---------- 订阅 ----------
@@ -1798,7 +2059,22 @@ def mark_owners(users, creds):
     return owners
 
 
-def _read_node(node):
+def _read_prism(node, marks):
+    """Prism 内置按账号的累计流量（进程启动后累计，重启归零），转成和 iptables 计数相同的行，编号沿用账号的统计编号。"""
+    r = ssh(node, f"prism-node-server stats -c {shlex.quote(node['config_path'])}")
+    if r.returncode != 0:
+        return node["name"], None, (r.stderr.strip() or "读取失败")[-200:]
+    try:
+        users = json.loads(r.stdout)["users"]
+        return node["name"], [("app", d, marks[name], int(u[d])) for name, u in users.items() if name in marks
+                              for d in ("up", "down")], ""
+    except (ValueError, KeyError, TypeError) as e:
+        return node["name"], None, f"统计数据无法解析: {e}"
+
+
+def _read_node(node, marks=None):
+    if is_prism(node):
+        return _read_prism(node, marks or {})
     r = ssh(node, NODE_READ)
     if r.returncode == 3:
         return node["name"], None, "尚未启用统计"
@@ -1821,8 +2097,9 @@ def collect(conf, users=None, creds=None, log=print):
     creds = creds if creds is not None else load_creds()
     owners = mark_owners(users, creds)
     day = datetime.now().strftime("%Y-%m-%d")
+    marks = creds.get("marks", {})
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(_read_node, conf["nodes"]))
+        results = list(pool.map(lambda n: _read_node(n, marks), conf["nodes"]))
     status = {}
     con = traffic_db()
     with con:
@@ -2642,9 +2919,9 @@ def health_run(conf, log=print):
                   f"节点 {name} 的证书只剩 {r['cert_days']} 天。sbm 部署的节点由订阅服务器续期；「接入」的节点请检查节点上的 certbot。",
                   recover=("🟢 sbm 节点证书已续期", f"{name} 证书已更新。"), repeat=24 * 3600)
 
-    # 2. 节点上的 sing-box 服务与磁盘（连不上的节点由可达性探测负责告警）
+    # 2. 节点上的内核服务与磁盘（连不上的节点由可达性探测负责告警）
     def node_check(node):
-        return node, ssh(node, "systemctl is-active sing-box; df -P / | awk 'NR==2{print $5}'")
+        return node, ssh(node, f"systemctl is-active {kernel_of(node)['service']}; df -P / | awk 'NR==2{{print $5}}'")
     with ThreadPoolExecutor(max_workers=8) as pool:
         for node, r in pool.map(node_check, conf["nodes"]):
             if r.returncode not in (0, 3):  # is-active 不在运行时返回 3
@@ -2653,11 +2930,12 @@ def health_run(conf, log=print):
             lines = r.stdout.split()
             svc = lines[0] if lines else "unknown"
             pct = int(lines[1].rstrip("%")) if len(lines) > 1 and lines[1].rstrip("%").isdigit() else 0
-            check(f"svc:{node['name']}", svc != "active", f"sing-box {node['name']}", svc,
-                  f"🔴 sbm 节点 sing-box 未运行：{node['name']}", f"服务状态 {svc}。在节点上运行 journalctl -u sing-box -n 50 查看原因。",
-                  recover=("🟢 sbm 节点 sing-box 已恢复", f"{node['name']} 的 sing-box 重新运行。"), need=2)
+            k = kernel_of(node)
+            check(f"svc:{node['name']}", svc != "active", f"{k['label']} {node['name']}", svc,
+                  f"🔴 sbm 节点 {k['label']} 未运行：{node['name']}", f"服务状态 {svc}。在节点上运行 journalctl -u {k['service']} -n 50 查看原因。",
+                  recover=(f"🟢 sbm 节点 {k['label']} 已恢复", f"{node['name']} 的 {k['label']} 重新运行。"), need=2)
             check(f"disk:{node['name']}", pct >= 90, f"磁盘 {node['name']}", f"{pct}%",
-                  f"🟠 sbm 节点磁盘快满：{node['name']}", f"已用 {pct}%，日志过多可能导致 sing-box 异常。",
+                  f"🟠 sbm 节点磁盘快满：{node['name']}", f"已用 {pct}%，日志过多可能导致 {k['label']} 异常。",
                   repeat=24 * 3600)
 
     # 3. 账号推送失败的节点
@@ -3030,32 +3308,37 @@ def cmd_pool(conf):
 
 def cmd_status(conf):
     for node in conf["nodes"]:
-        r = ssh(node, "systemctl is-active sing-box; sing-box version | head -1")
-        print(f"[{node['name']}] {node['host']}: {' / '.join(r.stdout.split(chr(10))[:2]) or r.stderr.strip()}")
+        k = kernel_of(node)
+        r = ssh(node, f"systemctl is-active {k['service']}; {k['version']}")
+        print(f"[{node['name']}] {node['host']}: {k['label']} {' / '.join(r.stdout.split(chr(10))[:2]) or r.stderr.strip()}")
 
 
 def cmd_node(args, conf):
     users = load_users()
     if args.action == "list":
-        print(f"{'节点':<18}{'类型':<8}{'服务器':<18}地址")
+        print(f"{'节点':<18}{'类型':<8}{'内核':<10}{'服务器':<18}地址")
         for n in conf["nodes"]:
             kind = "部署" if n.get("managed") else "接入"
-            print(f"{n['name']:<18}{kind:<8}{n['host']:<18}{n['server']}:{n['port']}")
+            inner = f"（内部 {n['listen_port']}）" if "listen_port" in n else ""
+            print(f"{n['name']:<18}{kind:<8}{kernel_of(n)['label']:<10}{n['host']:<18}{n['server']}:{n['port']}{inner}")
         return
     if args.action == "pubkey":
         print("在新服务器上以 root 运行下面这条命令，授权订阅服务器管理它：\n")
         print(authorize_command(conf))
         return
     if args.action == "versions":
-        try:
-            rel = releases(refresh=True)
-        except SbmError as e:
-            die(str(e))
-        print(f"sing-box 最新正式版: {rel['latest']}{'（GitHub 连不上，用的是缓存）' if rel.get('stale') else ''}")
-        print(f"近期正式版: {', '.join(rel['stable'])}\n")
-        for n in conf["nodes"]:
-            v = node_version(n) or "无法连接"
-            print(f"  {n['name']:<18}{v:<12}{'✓ 最新' if v == rel['latest'] else '可升级'}")
+        for kernel in sorted({n.get("kernel", DEFAULT_KERNEL) for n in conf["nodes"]}):
+            try:
+                rel = releases(refresh=True, kernel=kernel)
+            except SbmError as e:
+                die(str(e))
+            print(f"{KERNELS[kernel]['label']} 最新正式版: {rel['latest']}{'（GitHub 连不上，用的是缓存）' if rel.get('stale') else ''}")
+            print(f"近期正式版: {', '.join(rel['stable'])}\n")
+            for n in conf["nodes"]:
+                if n.get("kernel", DEFAULT_KERNEL) == kernel:
+                    v = node_version(n) or "无法连接"
+                    print(f"  {n['name']:<18}{v:<12}{'✓ 最新' if v == rel['latest'] else '可升级'}")
+            print()
         return
     if args.action == "upgrade":
         names = [n["name"] for n in conf["nodes"]] if args.all else ([args.name] if args.name else [])
@@ -3072,7 +3355,8 @@ def cmd_node(args, conf):
         if args.action == "deploy":
             if not (args.host and args.sub):
                 die("deploy 需要 --host 和 --sub")
-            deploy_node(conf, users, args.name, args.host, args.ssh_port, args.sub, args.port, args.zone)
+            deploy_node(conf, users, args.name, args.host, args.ssh_port, args.sub, args.port, args.zone,
+                        kernel=args.kernel, listen=args.listen_port)
         elif args.action == "attach":
             if not args.host:
                 die("attach 需要 --host")
@@ -3109,10 +3393,10 @@ def main():
     pfl.add_argument("name", nargs="?")
     pfl.add_argument("users", nargs="*")
     pn = sub.add_parser("node", help="节点管理", description=(
-        "deploy: 在全新服务器上一键部署（自动 DNS、证书、安装 sing-box）\n"
+        "deploy: 在全新服务器上一键部署（自动 DNS、证书、安装内核；--kernel prism 用自研内核）\n"
         "attach: 接入已装好 sing-box 且有 AnyTLS 入站的服务器\n"
-        "versions: 查看各节点 sing-box 版本和最新版本\n"
-        "upgrade: 升级 sing-box，例如 sbm node upgrade --all 或 sbm node upgrade HK-01 --version 1.14.3\n"
+        "versions: 查看各节点内核版本和最新版本\n"
+        "upgrade: 升级内核，例如 sbm node upgrade --all 或 sbm node upgrade HK-01 --version 1.14.3\n"
         "先运行 sbm node pubkey，把输出的命令在新服务器上以 root 执行一次"),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     pn.add_argument("action", choices=["list", "pubkey", "deploy", "attach", "del", "versions", "upgrade"])
@@ -3123,7 +3407,9 @@ def main():
     pn.add_argument("--ssh-port", type=int, default=22)
     pn.add_argument("--sub", help="deploy: 子域名前缀，例如 hk1 → hk1.<主域名>")
     pn.add_argument("--zone", help="deploy: 使用域名管理里的哪个主域名（默认用默认域名）")
-    pn.add_argument("--port", type=int, default=443, help="deploy: AnyTLS 端口（默认 443）")
+    pn.add_argument("--port", type=int, default=443, help="deploy: 客户端连接的 AnyTLS 端口（默认 443）")
+    pn.add_argument("--listen-port", type=int, help="deploy: 服务器内部监听的端口（NAT 机器公网端口映射到内部端口时才需要）")
+    pn.add_argument("--kernel", choices=sorted(KERNELS), default=DEFAULT_KERNEL, help="deploy: 节点内核（默认 sing-box）")
     pn.add_argument("--inbound-tag", default="anytls-in", help="attach: 入站 tag")
     pn.add_argument("--config-path", default="/etc/sing-box/config.json", help="attach: 配置文件路径")
     pn.add_argument("--server", help="attach: 节点域名（默认读取入站的 server_name）")

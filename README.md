@@ -1,6 +1,6 @@
 # sbm — sing-box 节点、用户与订阅管理
 
-一台订阅服务器集中管理多台 [sing-box](https://github.com/SagerNet/sing-box) 节点：增删用户、一键部署节点、生成多客户端订阅、按用户统计流量，带网页控制台和命令行。
+一台订阅服务器集中管理多台节点（官方 [sing-box](https://github.com/SagerNet/sing-box) 或自研 [Prism](https://github.com/yuuolo/prism-node-server) 内核）：增删用户、一键部署节点、生成多客户端订阅、按用户统计流量，带网页控制台和命令行。
 
 协议使用 **AnyTLS**，订阅同时支持 sing-box、Hiddify、Clash Meta / Mihomo、Clash Verge Rev、Shadowrocket 等客户端。
 
@@ -11,9 +11,10 @@
 - **代理组与分流**（参照 ACL4SSR 精简分组）：节点选择、自动选择、故障转移、按节点名自动生成的地区组，以及 AI 服务（默认美国节点）、YouTube、Netflix、Telegram、GitHub、微软、苹果、广告拦截、全球直连、漏网之鱼；sing-box 与 Clash 两种格式分组和规则一致（规则数据来自 MetaCubeX/meta-rules-dat）
 - **配置管理**：现有分组是内置的默认配置，可以新增其他配置并按用户应用：选择节点、规则分流或全局代理、默认出口、是否拦截广告、服务分组（可选 Google、X、TikTok、Disney+ 等）、自定义规则（域名或 IP 走节点、直连或拒绝）、应用分流（按进程名或安卓包名指定去向）；切换配置只重新生成订阅，节点不重启
 - **节点管理**：
-  - 一键部署新服务器：自动添加 Cloudflare 解析、申请证书、安装 sing-box、写配置、放行防火墙
+  - 一键部署新服务器：自动添加 Cloudflare 解析、申请证书、安装内核、写配置、放行防火墙；支持公网端口映射到内部端口的 NAT 机器
+  - 节点内核可选 sing-box 或 Prism（prism-node-server）：Prism 的账号和证书变化时热加载，连接不断，内置按用户统计，不需要 iptables
   - 接入已有 sing-box 节点
-  - sing-box 版本查看与批量升级（失败自动回滚）
+  - 内核版本查看与批量升级（失败自动回滚）
   - 节点状态：运行状态、CPU 负载、内存、系统版本
 - **国内可达性检测与告警**：订阅服务器每 5 分钟从国内检测各节点（国内 DNS、TCP/TLS 握手、经节点真实代理一次，失败时由其他节点从境外对照），区分「疑似被封 / 节点故障 / DNS 污染 / 代理不通」；异常时通过企业微信、飞书、钉钉、Bark、Telegram 告警
 - **告警与每周简报**：证书快到期、节点 sing-box 停止、账号同步失败、流量采集停止、控制台被暴力破解、磁盘快满、备份失败、定时任务失败（systemd OnFailure）；去重、定期提醒、恢复通知；每周一发送简报；没有渠道时也记录在控制台
@@ -26,7 +27,7 @@
 ## 架构
 
 ```
-用户设备 ──AnyTLS──▶ sing-box 节点（可多台）◀──SSH 密钥管理── 订阅服务器
+用户设备 ──AnyTLS──▶ sing-box / Prism 节点（可多台）◀──SSH 密钥管理── 订阅服务器
    │                                                         │
    └────────── 订阅 / 使用说明页（HTTPS）◀───────────────────┘
                                          控制台 · sbm 命令行 · 每日维护 · 流量采集

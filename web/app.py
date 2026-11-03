@@ -73,7 +73,8 @@ def state():
         "sub_domain": conf["sub_domain"],
         "nodes": [
             {"name": n["name"], "host": n["host"], "server": n["server"], "port": n["port"],
-             "managed": n.get("managed", False)}
+             "managed": n.get("managed", False), "kernel": n.get("kernel", sbm.DEFAULT_KERNEL),
+             "kernel_label": sbm.kernel_of(n)["label"], "listen_port": n.get("listen_port")}
             for n in conf["nodes"]
         ],
         "base_domain": sbm.base_domain(conf),
@@ -104,9 +105,9 @@ def state():
 # 启动时间用开机时刻 + 单调时钟换算，避免解析各系统不同格式和时区的时间字符串；
 # 不用 systemctl show --value：CentOS 7 的 systemd 219 不支持
 STATUS_SCRIPT = r"""
-echo "active=$(systemctl is-active sing-box)"
-echo "version=$(sing-box version 2>/dev/null | awk 'NR==1{print $3}')"
-echo "started_mono=$(systemctl show -p ActiveEnterTimestampMonotonic sing-box | cut -d= -f2)"
+echo "active=$(systemctl is-active @SERVICE@)"
+echo "version=$(@VERSION@)"
+echo "started_mono=$(systemctl show -p ActiveEnterTimestampMonotonic @SERVICE@ | cut -d= -f2)"
 echo "btime=$(awk '/^btime/{print $2}' /proc/stat)"
 echo "uptime=$(cut -d. -f1 /proc/uptime)"
 echo "load=$(cut -d' ' -f1-3 /proc/loadavg)"
@@ -126,7 +127,8 @@ def _num(s, cast=float, default=None):
 
 
 def one_status(n):
-    r = sbm.ssh(n, STATUS_SCRIPT)
+    k = sbm.kernel_of(n)
+    r = sbm.ssh(n, STATUS_SCRIPT.replace("@SERVICE@", k["service"]).replace("@VERSION@", k["version"]))
     kv = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
     load = [_num(x) for x in kv.get("load", "").split()]
     mem = [_num(x, int) for x in kv.get("mem", "").split()]
@@ -358,10 +360,14 @@ def deploy_job(body):
     name, host, sub = str_field(body, "name"), str_field(body, "host"), str_field(body, "sub").lower()
     ssh_port, port = str_field(body, "ssh_port", "22"), str_field(body, "port", "443")
     zone = str_field(body, "zone") or None
-    if not (ssh_port.isdigit() and port.isdigit()):
+    kernel = str_field(body, "kernel") or sbm.DEFAULT_KERNEL
+    listen = str_field(body, "listen_port") or port
+    if not (ssh_port.isdigit() and port.isdigit() and listen.isdigit()):
         raise ApiError(400, "端口必须是数字")
+    if kernel not in sbm.KERNELS:
+        raise ApiError(400, "不支持的内核")
     return start_job(f"部署节点 {name}", lambda log: sbm.deploy_node(
-        sbm.load(sbm.CONF), sbm.load_users(), name, host, ssh_port, sub, port, zone, log=log))
+        sbm.load(sbm.CONF), sbm.load_users(), name, host, ssh_port, sub, port, zone, log=log, kernel=kernel, listen=listen))
 
 
 # ---------- 域名与 Cloudflare Token ----------
@@ -497,9 +503,16 @@ def attach_job(body):
 
 def versions(refresh):
     try:
-        return sbm.releases(refresh=refresh)
+        data = dict(sbm.releases(refresh=refresh))
     except sbm.SbmError as e:
         raise ApiError(502, str(e))
+    # 有 Prism 节点时才查，版本信息查询失败不影响 sing-box 这边
+    if any(sbm.is_prism(n) for n in sbm.load(sbm.CONF)["nodes"]):
+        try:
+            data["prism"] = sbm.releases(refresh=refresh, kernel="prism")
+        except sbm.SbmError as e:
+            data["prism"], data["prism_error"] = None, str(e)
+    return data
 
 
 def upgrade_job(body):
@@ -510,7 +523,7 @@ def upgrade_job(body):
     if version and not sbm.VERSION_RE.match(version):
         raise ApiError(400, "版本号格式不对")
     label = "、".join(names) if len(names) <= 2 else f"{len(names)} 个节点"
-    return start_job(f"升级 sing-box · {label}", lambda log: sbm.upgrade_nodes(
+    return start_job(f"升级内核 · {label}", lambda log: sbm.upgrade_nodes(
         sbm.load(sbm.CONF), names, version, log=log))
 
 

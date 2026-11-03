@@ -541,7 +541,10 @@ tbody tr:hover td { background: var(--surface-2); }
             <div class="field"><label for="nName">节点名称（显示在客户端里）</label><input id="nName" required maxlength="32" pattern="[A-Za-z0-9_.\-]{1,32}" placeholder="例如 HK-01"></div>
             <div class="field"><label for="nHost">服务器 IP</label><input id="nHost" required maxlength="253" placeholder="例如 203.0.113.10"></div>
             <div class="field"><label for="nSshPort">SSH 端口</label><input id="nSshPort" type="number" min="1" max="65535" value="22" required></div>
-            <div class="field deploy-only"><label for="nPort">节点端口（AnyTLS）</label><input id="nPort" type="number" min="1" max="65535" value="443"></div>
+            <div class="field deploy-only"><label for="nPort">节点端口（AnyTLS，客户端连接）</label><input id="nPort" type="number" min="1" max="65535" value="443"></div>
+            <div class="field deploy-only"><label for="nKernel">节点内核</label>
+              <select id="nKernel"><option value="sing-box">sing-box（官方）</option><option value="prism">Prism（自研，用户和证书热加载）</option></select></div>
+            <div class="field deploy-only"><label for="nListen">内部端口（NAT 机器才填）</label><input id="nListen" type="number" min="1" max="65535" placeholder="默认和节点端口相同"></div>
             <div class="field attach-only" hidden><label for="nTag">入站 tag</label><input id="nTag" value="anytls-in"></div>
           </div>
           <div class="field deploy-only">
@@ -553,7 +556,7 @@ tbody tr:hover td { background: var(--surface-2); }
             <div class="field"><label for="nPath">配置文件路径</label><input id="nPath" value="/etc/sing-box/config.json"></div>
             <div class="field"><label for="nServer">节点域名（可选）</label><input id="nServer" placeholder="默认读取入站的 server_name"></div>
           </div>
-          <div class="callout deploy-only">部署大约需要 1~2 分钟：设置 DNS → 申请证书 → 安装 sing-box → 启动。完成后自动加入所有用户的订阅，现有节点不受影响。<br>如果云服务商有安全组，记得放行节点端口。</div>
+          <div class="callout deploy-only">部署大约需要 1~2 分钟：设置 DNS → 申请证书 → 安装内核 → 启动。完成后自动加入所有用户的订阅，现有节点不受影响。<br>如果云服务商有安全组，记得放行节点端口。NAT 机器的公网端口映射到内部端口时，「节点端口」填公网端口，「内部端口」填映射到的端口。</div>
           <div class="callout attach-only" hidden>节点上已有的 AnyTLS 用户会被替换成这里的用户列表，并重启该节点的 sing-box。目前只支持 AnyTLS 入站。</div>
         </div>
       </div>
@@ -838,8 +841,12 @@ tbody tr:hover td { background: var(--surface-2); }
 <!-- 版本管理 -->
 <div class="modal-bg" id="verModal">
   <form class="modal" id="verForm">
-    <div class="modal-head"><h3>sing-box 版本管理</h3><button type="button" class="btn ghost sm" data-close>关闭</button></div>
+    <div class="modal-head"><h3>内核版本管理</h3><button type="button" class="btn ghost sm" data-close>关闭</button></div>
     <div class="modal-body">
+      <div class="seg" id="verKernel" hidden>
+        <button type="button" data-kernel="sing-box">sing-box</button>
+        <button type="button" data-kernel="prism">Prism</button>
+      </div>
       <div class="ver-head">
         <div><div class="muted" style="font-size:12px">最新正式版</div><div class="big" id="verLatest">–</div></div>
         <div style="flex:1"></div>
@@ -1095,14 +1102,14 @@ function bar(pct, text, title) {
     <span class="meter-text">${esc(text)}</span></div>`;
 }
 
-function metricRows(s, verRow) {
+function metricRows(s, verRow, kernelLabel) {
   const row = (k, v, title) => `<dt>${k}</dt><dd${title ? ` title="${esc(title)}"` : ""}>${v}</dd>`;
   const out = [];
   out.push(row("系统", esc(s.os ? `${s.os} · ${s.arch}` : "–"), s.kernel ? `内核 ${s.kernel}` : ""));
   out.push(verRow(s.version));
   if (s.started_at) {
     const started = new Date(s.started_at * 1000);
-    out.push(row("已运行", esc(duration(Date.now() / 1000 - s.started_at)), `sing-box 启动于 ${started.toLocaleString()}`));
+    out.push(row("已运行", esc(duration(Date.now() / 1000 - s.started_at)), `${kernelLabel} 启动于 ${started.toLocaleString()}`));
   } else {
     out.push(row("已运行", "–"));
   }
@@ -1132,23 +1139,25 @@ function renderNodes() {
     const dirty = state.pool && state.pool.dirty.includes(n.name)
       ? `<span class="pill off" title="上次推送账号到这个节点失败，部分新用户可能连不上它；下次维护或点“同步节点”会重试">待同步</span>` : "";
     const row = (k, v) => `<dt>${k}</dt><dd>${esc(v || "–")}</dd>`;
-    const latest = releaseInfo && releaseInfo.latest;
+    const rel = relOf(n.kernel);
+    const latest = rel && rel.latest;
     const outdated = s && s.reachable && latest && s.version && s.version !== latest;
-    const verRow = (v) => `<dt>sing-box</dt><dd>${esc(v || "–")}${
+    const verRow = (v) => `<dt>${esc(n.kernel_label)}</dt><dd>${esc(v || "–")}${
       outdated ? `<span class="ver-new">可升级到 ${esc(latest)}</span>` : latest && v === latest ? `<span class="ver-ok">✓ 最新</span>` : ""}</dd>`;
     const foot = [
       outdated ? `<button class="btn sm" data-upgrade-node>升级到 ${esc(latest)}</button>` : "",
       state.nodes.length > 1 ? `<button class="btn sm ghost danger" data-remove-node>移除</button>` : "",
     ].join("");
     const badge = n.managed ? `<span class="badge managed" title="由 sbm 部署，证书自动续期">部署</span>` : `<span class="badge" title="外部接入，证书由节点自行管理">接入</span>`;
+    const kernelBadge = n.kernel === "prism" ? `<span class="badge" title="自研内核 prism-node-server：用户和证书热加载，连接不断">Prism</span>` : "";
     return `<div class="node" data-node="${esc(n.name)}">
-      <div class="node-head"><b>${esc(n.name)}</b>${badge}<div style="flex:1"></div>${dirty}${pill}</div>
+      <div class="node-head"><b>${esc(n.name)}</b>${badge}${kernelBadge}<div style="flex:1"></div>${dirty}${pill}</div>
       <dl>
-        ${row("地址", `${n.server}:${n.port}`)}
+        ${row("地址", `${n.server}:${n.port}${n.listen_port ? `（内部 ${n.listen_port}）` : ""}`)}
         ${probeRow(n.name)}
         ${state.traffic && state.traffic.enabled ? nodeTrafficRow(n.name) : ""}
         ${row("服务器", n.host)}
-        ${s && s.reachable ? metricRows(s, verRow) : ""}
+        ${s && s.reachable ? metricRows(s, verRow, n.kernel_label) : ""}
         ${s && !s.reachable ? row("错误", s.error) : ""}
       </dl>
       ${foot ? `<div class="node-foot">${foot}</div>` : ""}
@@ -1299,7 +1308,8 @@ $("#nodeForm").onsubmit = async (e) => {
     host: $("#nHost").value.trim(),
     ssh_port: $("#nSshPort").value,
   };
-  if (nodeMode === "deploy") Object.assign(body, { sub: $("#nSub").value.trim(), port: $("#nPort").value, zone: $("#nZone").value });
+  if (nodeMode === "deploy") Object.assign(body, { sub: $("#nSub").value.trim(), port: $("#nPort").value, zone: $("#nZone").value,
+    kernel: $("#nKernel").value, listen_port: $("#nListen").value });
   else Object.assign(body, { inbound_tag: $("#nTag").value.trim(), config_path: $("#nPath").value.trim(), server: $("#nServer").value.trim() });
   try {
     const { job } = await api("POST", `api/nodes/${nodeMode}`, body);
@@ -2087,6 +2097,11 @@ $("#domList").addEventListener("click", async (e) => {
 
 // ---------- 版本管理 ----------
 let releaseInfo = null;
+let verKernel = "sing-box";
+function relOf(kernel) {
+  if (!releaseInfo) return null;
+  return kernel === "prism" ? releaseInfo.prism : releaseInfo;
+}
 async function loadReleases(refresh) {
   try { releaseInfo = await api("GET", "api/versions" + (refresh ? "?refresh=1" : "")); }
   catch (e) { if (refresh) toast("err", "获取版本信息失败", e.message); }
@@ -2099,12 +2114,17 @@ function startUpgrade(names, version) {
 }
 
 function renderVerModal() {
-  const r = releaseInfo;
+  const kernels = [...new Set(state.nodes.map((n) => n.kernel))];
+  if (!kernels.includes(verKernel)) verKernel = kernels[0];
+  $("#verKernel").hidden = kernels.length < 2;
+  document.querySelectorAll("#verKernel button").forEach((b) => b.classList.toggle("on", b.dataset.kernel === verKernel));
+  const r = relOf(verKernel);
   $("#verLatest").textContent = r ? r.latest + (r.stale ? "（缓存）" : "") : "无法获取";
+  $("#verHint").textContent = r || !(releaseInfo && releaseInfo.prism_error) ? "也可以选择旧版本进行回退。" : releaseInfo.prism_error;
   $("#verSelect").innerHTML = r ? r.stable.map((v) => `<option value="${esc(v)}">${esc(v)}${v === r.latest ? "（最新）" : ""}</option>`).join("") : "";
   if (r) $("#verSelect").value = r.latest;
   const target = $("#verSelect").value;
-  $("#verList").innerHTML = state.nodes.map((n) => {
+  $("#verList").innerHTML = state.nodes.filter((n) => n.kernel === verKernel).map((n) => {
     const s = statuses && statuses.find((x) => x.name === n.name);
     const cur = s && s.reachable ? s.version : "未知";
     return `<label class="ver-item"><input type="checkbox" value="${esc(n.name)}" ${cur !== target && cur !== "未知" ? "checked" : ""}>
@@ -2117,6 +2137,10 @@ $("#verSelect").addEventListener("change", () => {
     cb.checked = cb.closest(".ver-item").querySelector(".cur").textContent !== target;
   });
 });
+$("#verKernel").onclick = (e) => {
+  const b = e.target.closest("[data-kernel]");
+  if (b) { verKernel = b.dataset.kernel; renderVerModal(); }
+};
 $("#verBtn").onclick = () => { renderVerModal(); openModal("#verModal"); };
 $("#verRefresh").onclick = async () => { await loadReleases(true); renderVerModal(); };
 $("#verForm").onsubmit = async (e) => {
@@ -2132,13 +2156,15 @@ $("#nodes").addEventListener("click", async (e) => {
   if (reach) { showProbe(reach.dataset.probe); return; }
   if (e.target.closest("[data-upgrade-node]")) {
     const name = e.target.closest("[data-node]").dataset.node;
-    if (await confirmBox("升级 sing-box", `把 <b>${esc(name)}</b> 升级到 <b>${esc(releaseInfo.latest)}</b>？<br><br>节点会重启几秒，现有配置保持不变；新版本启动失败会自动回滚。`, "升级"))
-      startUpgrade([name], releaseInfo.latest).catch((err) => toast("err", "无法开始升级", err.message));
+    const node = state.nodes.find((n) => n.name === name);
+    const latest = relOf(node.kernel).latest;
+    if (await confirmBox(`升级 ${node.kernel_label}`, `把 <b>${esc(name)}</b> 升级到 <b>${esc(latest)}</b>？<br><br>节点会重启几秒，现有配置保持不变；新版本启动失败会自动回滚。`, "升级"))
+      startUpgrade([name], latest).catch((err) => toast("err", "无法开始升级", err.message));
     return;
   }
   if (!e.target.closest("[data-remove-node]")) return;
   const name = e.target.closest("[data-node]").dataset.node;
-  if (!(await confirmBox("移除节点", `从订阅中移除 <b>${esc(name)}</b>？<br><br>只是不再管理和下发这个节点：服务器上的 sing-box、DNS 解析和证书都保持原样，需要的话请自行清理。`, "移除", true))) return;
+  if (!(await confirmBox("移除节点", `从订阅中移除 <b>${esc(name)}</b>？<br><br>只是不再管理和下发这个节点：服务器上的内核、DNS 解析和证书都保持原样，需要的话请自行清理。`, "移除", true))) return;
   try {
     const res = await api("DELETE", `api/nodes/${encodeURIComponent(name)}`, {});
     state = res.state; render(); toast("ok", `节点 ${name} 已移除`, res.log); loadStatus();
