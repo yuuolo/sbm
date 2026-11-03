@@ -355,6 +355,7 @@ kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var
   <li><b>内部端口</b>填映射到的端口，节点程序监听的是它。没有映射就留空。</li>
 </ul>
 <p>例如服务商给的是公网 38101 映射到内部 443：节点端口填 <code>38101</code>，内部端口填 <code>443</code>。节点卡片会显示 <code>域名:38101（内部 443）</code>。部署时系统防火墙放行的是内部端口；证书用 DNS 验证，不需要 80 或 443 能从外面访问。</p>
+<p><b>中国大陆机房的机器不适合做节点。</b>这类机器的出口在国内，访问不了境外被屏蔽的网站；不少机房还会按 TLS 的 SNI 拦截没有 ICP 备案的域名，可能部署时一切正常，之后客户端开始报 <code>connection reset</code>。这和节点内核无关，sing-box 和 Prism 都会受影响。</p>
 
 <h3 id="attach">接入已有节点</h3>
 <p>服务器上已经自己配好了 sing-box 和 AnyTLS 入站时使用。同样先运行授权命令，然后在「接入已有 sing-box」里填写信息。<b>节点上原有的 AnyTLS 用户会被替换</b>成控制台的账号列表。</p>

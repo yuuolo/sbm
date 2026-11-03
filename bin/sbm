@@ -753,11 +753,12 @@ def verify_tls(node, log):
          "-servername", node["server"], "-verify_hostname", node["server"]],
         input="", capture_output=True, text=True,
     )
-    if "Verify return code: 0 (ok)" in r.stdout:
+    # 握手被中断、没有收到证书时 openssl 也会输出 return code 0，要同时确认协商出了加密套件
+    if "Verify return code: 0 (ok)" in r.stdout and "Cipher is (NONE)" not in r.stdout:
         log("  TLS 握手正常，证书有效")
     else:
         # 订阅服务器在国内，到境外节点的直连握手可能被干扰，不影响部署结果
-        log("  ⚠ 从订阅服务器验证 TLS 未通过（国内直连境外可能被干扰），请用客户端实际连接确认")
+        log("  ⚠ 从订阅服务器验证 TLS 未通过（国内直连境外可能被干扰，大陆机房可能拦截未备案域名），请用客户端实际连接确认")
 
 
 def deploy_node(conf, users, name, host, ssh_port, sub, port, zone=None, log=print, kernel=DEFAULT_KERNEL, listen=None):
@@ -947,12 +948,23 @@ def node_version(node):
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def _download(url, limit):
+    """直连下载，总时长不超过 limit 秒：国内到 GitHub 的下载可能一直很慢但不断开。"""
+    req = urllib.request.Request(url, headers={"User-Agent": "sbm"})
+    deadline = time.monotonic() + limit
+    chunks = []
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        while chunk := resp.read1(65536):
+            chunks.append(chunk)
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"{limit} 秒内没有下载完")
+    return b"".join(chunks)
+
+
 def fetch_url(conf, url):
     """下载一个文件。订阅服务器在国内，直连 GitHub 下载常常失败，失败时让能连上的节点代为下载。"""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "sbm"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.read()
+        return _download(url, 30 if conf["nodes"] else 600)  # 没有节点可以代为下载时，再慢也只能等
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise SbmError(f"找不到 {url}")
@@ -960,7 +972,7 @@ def fetch_url(conf, url):
     except OSError as e:
         err = e
     for node in conf["nodes"]:
-        r = subprocess.run(ssh_args(node, f"curl -fsSL --retry 2 --max-time 120 {shlex.quote(url)}"),
+        r = subprocess.run(ssh_args(node, f"curl -fsSL --connect-timeout 10 --retry 2 --max-time 120 {shlex.quote(url)}"),
                            capture_output=True, stdin=subprocess.DEVNULL)
         if r.returncode == 0 and r.stdout:
             return r.stdout
