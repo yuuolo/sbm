@@ -19,6 +19,7 @@ import fcntl
 import glob
 import hashlib
 import hmac
+import io
 import ipaddress
 import json
 import os
@@ -1084,6 +1085,12 @@ def upgrade_nodes(conf, names, version=None, log=print):
     if version and len(kernels) > 1:
         raise SbmError("所选节点的内核不同，不能升级到同一个版本，请分开升级")
     latest = {k: version or releases(kernel=k)["latest"] for k in kernels}
+    if "prism" in kernels:
+        # Prism 的计数在进程内，重启归零：先把上次采集之后的流量收上来
+        try:
+            collect(conf, log=lambda *_: None)
+        except Exception as e:  # noqa: BLE001 - 统计失败不能阻止升级
+            log(f"⚠ 升级前采集流量失败: {e}")
     failed = []
     for i, node in enumerate(targets, 1):
         target = latest[node.get("kernel", DEFAULT_KERNEL)]
@@ -1645,7 +1652,7 @@ def build_uri(conf, user, profile=None):
     links = []
     for n in profile_nodes(conf, profile or default_profile()):
         pw = urllib.parse.quote(user["password"], safe="")
-        params = urllib.parse.urlencode({"sni": n["sni"]})
+        params = urllib.parse.urlencode({"sni": n["sni"], "fp": "chrome"})
         links.append(f"anytls://{pw}@{n['server']}:{n['port']}/?{params}#{urllib.parse.quote(n['name'])}")
     return base64.b64encode("\n".join(links).encode()).decode() + "\n"
 
@@ -2026,12 +2033,34 @@ def reconcile(conf, users, creds, log=print):
     return not dirty
 
 
+def sync_prism(conf, users, creds, log=print):
+    """Prism 热加载不断开其他用户，不用等维护：待清理账号立即从 Prism 节点上去掉（还在连接的会被断开）。
+    sing-box 节点仍在维护时清理。推送失败的节点记入 dirty，下次维护重试。"""
+    nodes = [n for n in conf["nodes"] if is_prism(n)]
+    if not nodes:
+        return
+    active = {u["cred"] for u in users if u["enabled"]}
+    retiring = {r["name"] for r in creds["retiring"]} - active
+    cred_list = [c for c in node_credentials(users, creds) if c["name"] not in retiring]
+    marks = creds["marks"]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda n: push_node(n, cred_list, marks), nodes))
+    failed = [n["name"] for n, (success, _) in zip(nodes, results) if not success]
+    for n, (success, msg) in zip(nodes, results):
+        if not success:
+            log(f"[{n['name']}] 同步账号失败: {msg}")
+    dirty = [d for d in creds.get("dirty", []) if d not in {n["name"] for n in nodes}]
+    creds["dirty"] = dirty + failed
+    save_creds(creds)
+
+
 def commit(conf, users, creds, need_push, log=print):
     save_users(users)
     if need_push:
         return reconcile(conf, users, creds, log)
     save_creds(creds)
     build_subs(conf, users)
+    sync_prism(conf, users, creds, log)
     log("已生效，节点无需重启")
     return True
 
@@ -2555,23 +2584,51 @@ def probe_credential():
         return creds.get("probe")
 
 
+def download_singbox(conf):
+    """全是 Prism 节点时没有 sing-box 可以复制，下载官方版本。下载失败不影响其他检测项，每小时最多重试一次。"""
+    arch = PRISM_ARCH.get(os.uname().machine)
+    tried = f"{SB_BIN}.tried"
+    if not arch or (os.path.exists(tried) and time.time() - os.path.getmtime(tried) < 3600):
+        return None
+    write_file(tried, "", 0o600)
+    try:
+        ver = releases(kernel="sing-box")["latest"]
+        name = f"sing-box-{ver}-linux-{arch}"
+        data = fetch_url(conf, f"https://github.com/{KERNELS['sing-box']['repo']}/releases/download/v{ver}/{name}.tar.gz")
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            binary = tar.extractfile(f"{name}/sing-box").read()
+    except (OSError, SbmError, KeyError, tarfile.TarError) as e:
+        print(f"下载 sing-box 失败，本次不检测代理: {e}", file=sys.stderr)
+        return None
+    return binary
+
+
 def ensure_singbox_bin(conf):
-    """本机做代理检测用的 sing-box：没有时从任一节点复制一份（节点与订阅服务器同为 x86_64 Linux）。"""
+    """本机做代理检测用的 sing-box：没有时从 sing-box 节点复制一份（节点与订阅服务器同为 x86_64 Linux），
+    没有这样的节点就下载。"""
     if os.access(SB_BIN, os.X_OK):
         return SB_BIN
     os.makedirs(os.path.dirname(SB_BIN), mode=0o700, exist_ok=True)
+
+    def install(binary):
+        with open(f"{SB_BIN}.tmp", "wb") as f:
+            f.write(binary)
+        os.chmod(f"{SB_BIN}.tmp", 0o700)
+        if subprocess.run([f"{SB_BIN}.tmp", "version"], capture_output=True).returncode == 0:
+            os.replace(f"{SB_BIN}.tmp", SB_BIN)
+            return True
+        return False
+
     for node in conf["nodes"]:
+        if is_prism(node):
+            continue
         args = ["ssh", "-i", node["ssh_key"], "-p", str(node.get("ssh_port", 22)), "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10", f"{node['ssh_user']}@{node['host']}", "cat $(command -v sing-box)"]
         r = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL)
-        if r.returncode == 0 and r.stdout[:4] == b"\x7fELF":
-            with open(f"{SB_BIN}.tmp", "wb") as f:
-                f.write(r.stdout)
-            os.chmod(f"{SB_BIN}.tmp", 0o700)
-            if subprocess.run([f"{SB_BIN}.tmp", "version"], capture_output=True).returncode == 0:
-                os.replace(f"{SB_BIN}.tmp", SB_BIN)
-                return SB_BIN
-    return None
+        if r.returncode == 0 and r.stdout[:4] == b"\x7fELF" and install(r.stdout):
+            return SB_BIN
+    binary = download_singbox(conf)
+    return SB_BIN if binary and install(binary) else None
 
 
 def _proxy_checks(conf, cred, sb_bin):
