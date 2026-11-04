@@ -2483,6 +2483,7 @@ CN_DNS = "223.5.5.5"
 PROBE_STATUS = {
     "ok": "正常", "dns": "域名解析异常（疑似 DNS 污染）", "blocked": "疑似被封（境外可连，国内不通）",
     "down": "节点故障（国内外都连不上）", "unreachable": "国内无法访问", "proxy_fail": "代理不通（TLS 正常）",
+    "tls_reset": "TLS 被重置（TCP 能连，疑似网络按域名拦截）",
 }
 ALERT_AFTER = 2          # 连续几轮异常才告警
 ALERT_REPEAT = 6 * 3600  # 持续异常时的提醒间隔（秒）
@@ -2539,7 +2540,7 @@ def node_ip(node):
 
 def _local_checks(node):
     """DNS / TCP / TLS 三项，在订阅服务器上直接做。"""
-    res = {"dns": "fail", "tcp_ms": None, "tls_ms": None, "cert_days": None, "err": []}
+    res = {"dns": "fail", "tcp_ms": None, "tls_ms": None, "tls_reset": False, "cert_days": None, "err": []}
     try:
         ip = node_ip(node)
     except OSError as e:
@@ -2570,6 +2571,7 @@ def _local_checks(node):
                 if not_after:
                     res["cert_days"] = int((ssl.cert_time_to_seconds(not_after) - time.time()) // 86400)
     except (OSError, ssl.SSLError) as e:
+        res["tls_reset"] = isinstance(e, ConnectionResetError)
         res["err"].append(f"TLS 握手失败: {e}")
     return res
 
@@ -2692,6 +2694,18 @@ def _outside_check(conf, target):
     return "n/a", ""
 
 
+def _service_note(node):
+    """握手被重置时看一下节点上的服务：还在运行，问题多半就在节点外面。"""
+    k = kernel_of(node)
+    r = ssh(node, f"systemctl is-active {k['service']}")
+    state = r.stdout.strip()
+    if r.returncode == 0 and state == "active":
+        return f"节点上的 {k['label']} 在运行，问题多半在节点外的网络（大陆机房可能拦截未备案域名）"
+    if r.returncode in (0, 3):  # is-active 不在运行时返回 3
+        return f"节点上的 {k['label']} 状态是 {state}，先检查节点"
+    return "SSH 连不上节点，无法确认服务状态"
+
+
 def _classify(local, proxy, outside):
     proxy_ms, _ = proxy if proxy else (None, "")
     if proxy_ms is not None:
@@ -2699,7 +2713,11 @@ def _classify(local, proxy, outside):
     if proxy is None and local["tls_ms"] is not None:  # 还没有代理检测条件时，以 TLS 为准
         return "ok"
     if local["tcp_ms"] is None or local["tls_ms"] is None:
-        return {"ok": "blocked", "fail": "down"}.get(outside, "unreachable")
+        if outside == "ok":
+            return "blocked"
+        if local["tls_reset"]:  # TCP 能连、握手被重置，不等于节点宕机
+            return "tls_reset"
+        return {"fail": "down"}.get(outside, "unreachable")
     if local["dns"] in ("mismatch", "empty"):
         return "dns"
     return "proxy_fail"
@@ -2725,6 +2743,8 @@ def probe_run(conf, log=print):
         detail = loc["err"] + ([px[1]] if px and px[1] else [])
         if outside:
             detail.append(f"境外对照（经 {via}）：{'可以连接' if outside == 'ok' else '也连不上' if outside == 'fail' else '无可用对照节点'}")
+        if status == "tls_reset":
+            detail.append(_service_note(n))
         results[name] = {"status": status, "label": PROBE_STATUS[status], "dns": loc["dns"], "tcp_ms": loc["tcp_ms"],
                          "tls_ms": loc["tls_ms"], "proxy_ms": px[0] if px else None, "outside": outside,
                          "detail": detail, "proxy_tested": bool(px), "cert_days": loc["cert_days"]}

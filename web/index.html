@@ -1065,7 +1065,7 @@ function fmtBytes(n) {
   return i === 0 ? `${n} B` : `${n >= 100 ? n.toFixed(0) : n.toFixed(n >= 10 ? 1 : 2)} ${units[i]}`;
 }
 
-const REACH_SHORT = { ok: "正常", dns: "DNS 污染", blocked: "疑似被封", down: "节点故障", unreachable: "国内不通", proxy_fail: "代理不通" };
+const REACH_SHORT = { ok: "正常", dns: "DNS 污染", blocked: "疑似被封", down: "节点故障", unreachable: "国内不通", proxy_fail: "代理不通", tls_reset: "TLS 被重置" };
 const reachClass = (st) => (st === "ok" ? "ok" : st === "dns" ? "off" : "bad");
 
 function probeRow(name) {
@@ -1404,7 +1404,7 @@ async function showProbe(name) {
   $("#prFrom").textContent = hist.length ? fmt(hist[0].ts) : "";
   const events = hist.filter((h) => h.status !== "ok").slice(-10).reverse();
   $("#prEvents").innerHTML = events.length
-    ? `<table class="cfg-table"><tbody>${events.map((h) => `<tr><td style="white-space:nowrap">${fmt(h.ts)}</td><td><span class="pill ${reachClass(h.status)}">${REACH_SHORT[h.status]}</span></td><td class="muted" style="font-size:12.5px">${esc(h.detail.join("；"))}</td></tr>`).join("")}</tbody></table>`
+    ? `<table class="cfg-table"><tbody>${events.map((h) => `<tr><td style="white-space:nowrap">${fmt(h.ts)}</td><td style="white-space:nowrap"><span class="pill ${reachClass(h.status)}">${REACH_SHORT[h.status]}</span></td><td class="muted" style="font-size:12.5px">${esc(h.detail.join("；"))}</td></tr>`).join("")}</tbody></table>`
     : `<p class="muted" style="font-size:13px;margin:4px 0">最近 24 小时没有异常</p>`;
   openModal("#probeModal");
 }
