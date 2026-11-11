@@ -66,6 +66,8 @@ def state():
         "pool": {
             "spares": len(creds["spares"]),
             "size": sbm.pool_size(conf),
+            "low": sbm.pool_low(conf),
+            "pending": conf.get("pool_pending"),
             "retiring": [{"user": r["user"], "reason": r["reason"], "since": r["since"]} for r in creds["retiring"]],
             "dirty": creds["dirty"],
             "maintenance": conf.get("maintenance_time", "04:00"),
@@ -170,6 +172,34 @@ def run_op(op):
             raise ApiError(400, str(e))
         if notice:
             lines.insert(0, notice)
+        return ok, "\n".join(lines)
+
+
+def pool_settings(body):
+    size, low = body.get("size"), body.get("low")
+    if type(size) is not int or type(low) is not int or not 1 <= low <= size <= 1000:
+        raise ApiError(400, "容量和补充阈值必须是整数，且 1 ≤ 阈值 ≤ 容量 ≤ 1000")
+    with mutating():
+        conf = sbm.load(sbm.CONF)
+        conf["pool_pending"] = {"size": size, "low": low}
+        sbm.save_conf(conf)
+    return True, "设置已保存，等待手动应用；节点未同步"
+
+
+def pool_apply(_body):
+    with mutating():
+        conf = sbm.load(sbm.CONF)
+        pending = conf.get("pool_pending")
+        if not pending:
+            return True, "没有待应用的账号池设置"
+        conf.update(pool_size=pending["size"], pool_low=pending["low"])
+        lines = []
+        ok = sbm.reconcile(conf, sbm.load_users(), sbm.load_creds(), log=lines.append, resize_pool=True)
+        if ok:
+            conf.pop("pool_pending", None)
+            sbm.save_conf(conf)
+        else:
+            lines.append("部分节点失败，设置保留为待应用，请重试")
         return ok, "\n".join(lines)
 
 
@@ -697,6 +727,10 @@ class Handler(BaseHTTPRequestHandler):
             self.mutation(lambda body: profile_save(body, pf.group(1)), PROFILE_BODY_MAX)
         elif path == "/api/sync":
             self.mutation(lambda _body: sync_all())
+        elif path == "/api/pool/settings":
+            self.mutation(pool_settings)
+        elif path == "/api/pool/apply":
+            self.mutation(pool_apply)
         elif path == "/api/nodes/deploy":
             self.handle_api(lambda: deploy_job(self.read_body()))
         elif path == "/api/nodes/attach":

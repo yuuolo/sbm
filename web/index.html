@@ -440,6 +440,7 @@ tbody tr:hover td { background: var(--surface-2); }
     <div class="section-head">
       <h2>用户</h2>
       <span class="chip" id="poolChip"></span>
+      <button class="btn sm" id="poolSettingsBtn">账号池设置</button>
       <div class="spacer"></div>
       <button class="btn sm" id="prfBtn" title="管理订阅配置，并把配置应用到用户"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg>配置管理</button>
       <div class="search">
@@ -483,6 +484,18 @@ tbody tr:hover td { background: var(--surface-2); }
   </form>
 </div>
 
+<div class="modal-bg" id="poolModal">
+  <form class="modal" id="poolForm">
+    <div class="modal-head"><h3>账号池设置</h3></div>
+    <div class="modal-body">
+      <div class="field"><label for="poolSize">备用账号目标容量（1–1000）</label><input id="poolSize" type="number" min="1" max="1000" required></div>
+      <div class="field"><label for="poolLow">补充阈值（低于此数量时补满）</label><input id="poolLow" type="number" min="1" max="1000" required></div>
+      <div class="callout" id="poolStatus"></div>
+      <p class="muted">保存只记录待应用设置，不改变节点。空闲时手动应用；sing-box 配置变化会重启并短暂断开连接，Prism 使用热加载。每日维护继续使用已生效的设置。缩容只移除备用账号，不删除已分配给用户的账号。</p>
+    </div>
+    <div class="modal-foot"><button type="button" class="btn" data-close>关闭</button><button type="button" class="btn" id="poolApplyBtn">应用已保存设置</button><button type="submit" class="btn primary">保存待应用设置</button></div>
+  </form>
+</div>
 <!-- 编辑备注 -->
 <div class="modal-bg" id="noteModal">
   <form class="modal" id="noteForm" autocomplete="off">
@@ -1024,7 +1037,7 @@ function render() {
   renderNodes();
 
   const p = state.pool;
-  $("#poolChip").innerHTML = `账号池 <b>${p.spares}/${p.size}</b>` + (p.retiring.length ? ` · 待清理 <b>${p.retiring.length}</b>` : "");
+  $("#poolChip").innerHTML = `账号池 <b>${p.spares}/${p.size}</b>` + (p.pending ? " · 设置待应用" : "") + (p.retiring.length ? ` · 待清理 <b>${p.retiring.length}</b>` : "");
   $("#poolChip").title = `新增用户直接使用账号池里的备用账号，节点无需重启。\n每天 ${p.maintenance} 自动维护：清理旧账号并补满账号池。`
     + (p.retiring.length ? "\n\n待清理：\n" + p.retiring.map((r) => `${r.user}（${r.reason}，${r.since}）`).join("\n") : "");
 
@@ -1213,6 +1226,26 @@ $("#syncBtn").onclick = async () => {
     mutate("POST", "api/sync", {}, "同步成功", true);
 };
 
+$("#poolSettingsBtn").onclick = () => {
+  const p = state.pool, draft = p.pending || { size: p.size, low: p.low };
+  $("#poolSize").value = draft.size;
+  $("#poolLow").value = draft.low;
+  $("#poolStatus").textContent = `已生效：容量 ${p.size}，阈值 ${p.low}。` + (p.pending ? `待应用：容量 ${p.pending.size}，阈值 ${p.pending.low}。` : "没有待应用设置。");
+  $("#poolApplyBtn").disabled = !p.pending;
+  openModal("#poolModal");
+};
+$("#poolForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const size = Number($("#poolSize").value), low = Number($("#poolLow").value);
+  if (low > size) { toast("err", "无法保存", "补充阈值不能超过容量"); return; }
+  if (await mutate("POST", "api/pool/settings", { size, low }, "设置已保存，等待空闲时手动应用", false)) closeModal("#poolModal");
+};
+$("#poolApplyBtn").onclick = async () => {
+  if (await confirmBox("应用账号池设置", "将应用已保存的设置、调整备用账号并同步节点，同时清理待删除账号。sing-box 节点可能重启并短暂断开连接。请确认现在适合维护。", "立即应用")) {
+    closeModal("#poolModal");
+    await mutate("POST", "api/pool/apply", {}, "账号池设置已应用", true);
+  }
+};
 let noteTarget = null;
 $("#noteForm").onsubmit = async (e) => {
   e.preventDefault();

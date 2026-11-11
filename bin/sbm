@@ -2002,7 +2002,7 @@ def user_reset(users, creds, name, now=True):
     return need_push or now, "" if now else "旧密码将在下次维护时失效"
 
 
-def reconcile(conf, users, creds, log=print):
+def reconcile(conf, users, creds, log=print, resize_pool=False):
     """完整整理：清理待删除账号、补满账号池、推送到所有节点（只有配置变化的节点会重启）。"""
     target = pool_size(conf)
     # 先把各节点的计数收上来：待清理账号的最后一段流量要在它们被删之前记到用户名下
@@ -2010,7 +2010,9 @@ def reconcile(conf, users, creds, log=print):
         collect(conf, users, creds, log=lambda *_: None)
     except Exception as e:  # noqa: BLE001 - 统计失败不能阻止推送账号
         log(f"⚠ 流量统计采集失败（不影响本次同步）: {e}")
-    if len(creds["spares"]) < pool_low(conf):
+    if resize_pool:
+        creds["spares"] = creds["spares"][:target]
+    if resize_pool or len(creds["spares"]) < pool_low(conf):
         while len(creds["spares"]) < target:
             creds["spares"].append(new_cred())
     purged = len(creds["retiring"])
