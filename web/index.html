@@ -255,6 +255,7 @@ tbody tr:hover td { background: var(--surface-2); }
 .step-body > b { display: block; margin-bottom: 6px; }
 .cmd-box { position: relative; background: #0f1017; color: #c9f7d9; border-radius: 10px; padding: 10px 70px 10px 12px; font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 .cmd-box .btn { position: absolute; right: 8px; top: 8px; background: #23253a; border-color: #34374d; color: #e8e9f1; }
+[hidden] { display: none !important; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
 .suffix { display: flex; align-items: stretch; }
 .suffix input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
@@ -545,6 +546,7 @@ tbody tr:hover td { background: var(--surface-2); }
             <div class="field deploy-only"><label for="nKernel">节点内核</label>
               <select id="nKernel"><option value="sing-box">sing-box（官方）</option><option value="prism">Prism（自研，用户和证书热加载）</option></select></div>
             <div class="field deploy-only"><label for="nListen">内部端口（NAT 机器才填）</label><input id="nListen" type="number" min="1" max="65535" placeholder="默认和节点端口相同"></div>
+            <div class="field deploy-only"><label for="nDeployPath">配置文件路径（自动设置）</label><input id="nDeployPath" value="/etc/sing-box/config.json" readonly></div>
             <div class="field attach-only" hidden><label for="nTag">入站 tag</label><input id="nTag" value="anytls-in"></div>
           </div>
           <div class="field deploy-only">
@@ -1276,6 +1278,11 @@ $("#users").addEventListener("change", async (e) => {
 
 // ---------- 节点 ----------
 let nodeMode = "deploy";
+function updateDeployPath() {
+  $("#nDeployPath").value = $("#nKernel").value === "prism"
+    ? "/etc/prism-node-server/config.json" : "/etc/sing-box/config.json";
+}
+$("#nKernel").onchange = updateDeployPath;
 function setNodeMode(mode) {
   nodeMode = mode;
   document.querySelectorAll("#nodeMode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
@@ -1288,6 +1295,7 @@ $("#nodeMode").onclick = (e) => { const b = e.target.closest("[data-mode]"); if 
 
 $("#addNodeBtn").onclick = async () => {
   $("#nodeForm").reset();
+  updateDeployPath();
   setNodeMode("deploy");
   $("#nZone").innerHTML = (state.domains || []).map((d) =>
     `<option value="${esc(d.zone)}" ${d.default ? "selected" : ""}>.${esc(d.zone)}</option>`).join("");
