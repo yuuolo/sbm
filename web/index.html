@@ -416,6 +416,11 @@ tbody tr:hover td { background: var(--surface-2); }
     </div>
   </header>
 
+  <div class="callout" id="systemUpdateBox">
+    <span id="systemUpdateText">正在检查 SBM 系统更新…</span>
+    <a id="systemUpdateLink" href="https://github.com/yuuolo/sbm/releases" target="_blank" rel="noopener noreferrer">发布说明</a>
+    <button class="btn sm" id="systemUpdateCheck">检查更新</button>
+  </div>
   <div class="stats">
     <div class="stat"><div class="k">用户总数</div><div class="v" id="sTotal">–</div></div>
     <div class="stat"><div class="k">启用中</div><div class="v" id="sEnabled">–</div></div>
@@ -2252,6 +2257,22 @@ async function copy(text) {
   }
 }
 
+async function checkSystemUpdate(force = false) {
+  const button = $("#systemUpdateCheck");
+  button.disabled = true;
+  try {
+    const r = await api(force ? "POST" : "GET", force ? "api/system/update/check" : "api/system/update", force ? {} : undefined);
+    $("#systemUpdateText").textContent = `SBM v${r.current} · ` + (r.error
+      ? `${r.error}${r.latest ? `（上次获取：${r.latest}）` : ""}`
+      : r.available ? `发现新版本 ${r.latest}，可查看发布说明后更新。` : `已是最新稳定版（${r.latest}）。`);
+    $("#systemUpdateLink").href = r.url;
+    $("#systemUpdateBox").classList.toggle("ok", !r.error && !r.available);
+  } catch (e) { $("#systemUpdateText").textContent = "SBM 更新检查失败：" + e.message; }
+  finally { button.disabled = false; }
+}
+$("#systemUpdateCheck").onclick = () => checkSystemUpdate(true);
+checkSystemUpdate();
+setInterval(() => checkSystemUpdate(), 6 * 60 * 60 * 1000);
 load();
 loadStatus();
 loadReleases(false);

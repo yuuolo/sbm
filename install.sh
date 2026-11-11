@@ -52,6 +52,7 @@ step "安装程序文件"
 install -m 755 "$SRC/bin/sbm" /usr/local/bin/sbm
 install -d -m 755 /opt/sbm-web /usr/local/share/sbm
 install -m 644 "$SRC/web/app.py" "$SRC/web/index.html" "$SRC/web/manual.html" /opt/sbm-web/
+install -m 644 "$SRC/web/sbm_update.py" /opt/sbm-web/
 install -m 644 "$SRC/web/guide.tpl.html" /usr/local/share/sbm/
 install -m 644 "$SRC"/systemd/*.service "$SRC"/systemd/*.timer /etc/systemd/system/
 sed -e "s/{{SUB_DOMAIN}}/$DOMAIN/g" -e "s/{{SUB_PORT}}/$PORT/g" -e "s/{{PROFILE_NAME}}/$PROFILE/g" \

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import threading
+import sbm_update
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -665,6 +666,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_page(render_manual)
         elif url.path == "/api/state":
             self.handle_api(state)
+        elif url.path == "/api/system/update":
+            self.handle_api(sbm_update.check)
         elif url.path == "/api/status":
             self.handle_api(node_status)
         elif t := re.fullmatch(r"/api/users/([^/]+)/traffic", url.path):
@@ -727,6 +730,8 @@ class Handler(BaseHTTPRequestHandler):
             self.mutation(lambda body: profile_save(body, pf.group(1)), PROFILE_BODY_MAX)
         elif path == "/api/sync":
             self.mutation(lambda _body: sync_all())
+        elif path == "/api/system/update/check":
+            self.handle_api(lambda: (self.read_body(), sbm_update.check(force=True))[1])
         elif path == "/api/pool/settings":
             self.mutation(pool_settings)
         elif path == "/api/pool/apply":
