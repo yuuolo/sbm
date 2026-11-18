@@ -1,9 +1,10 @@
 # sing-box 订阅服务（由 sbm 生成文件，Nginx 只负责分发）
-# 显式参数 ?t=singbox|clash|uri 优先，否则按 User-Agent 识别客户端
+# 显式参数 ?t=singbox|clash|uri|prism-phone 优先，否则按 User-Agent 识别客户端
 map $arg_t $sub_fmt_arg {
     singbox singbox.json;
     clash   clash.yaml;
     uri     uri.txt;
+    prism-phone prism-phone.json;
     default "";
 }
 

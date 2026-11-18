@@ -1657,9 +1657,19 @@ def build_uri(conf, user, profile=None):
     return base64.b64encode("\n".join(links).encode()).decode() + "\n"
 
 
+def build_prism_phone(conf, user, profile=None):
+    """手机端仅导入基础节点；不下发桌面分流、providers 或 TLS 指纹。"""
+    outbounds = []
+    for node in profile_nodes(conf, profile or default_profile()):
+        outbound = outbound_singbox(node, user)
+        outbound["tls"].pop("utls", None)
+        outbounds.append(outbound)
+    return {"outbounds": outbounds}
+
+
 # ---------- 订阅配置详情（控制台「配置」与 sbm user config 使用） ----------
 
-SUB_FILES = {"singbox": "singbox.json", "clash": "clash.yaml", "uri": "uri.txt"}
+SUB_FILES = {"singbox": "singbox.json", "clash": "clash.yaml", "uri": "uri.txt", "prism_phone": "prism-phone.json"}
 
 
 def subscription_overview(conf, profile=None):
@@ -1800,7 +1810,8 @@ def build_guide(conf, user, profile=None):
     base = f"https://{conf['sub_domain']}:{conf['sub_port']}"
     sub = f"{base}/s/{user['token']}"
     label = urllib.parse.quote(conf.get("profile_name", "sub"))
-    links = {"universal": sub, "singbox": f"{sub}?t=singbox", "clash": f"{sub}?t=clash", "uri": f"{sub}?t=uri"}
+    links = {"universal": sub, "singbox": f"{sub}?t=singbox", "clash": f"{sub}?t=clash", "uri": f"{sub}?t=uri",
+             "prism_phone": f"{sub}?t=prism-phone"}
     data = {
         "name": user["name"],
         "links": links,
@@ -1835,6 +1846,7 @@ def build_subs(conf, users):
         write_file(f"{d}/singbox.json", json.dumps(build_singbox(conf, u, profile), indent=2, ensure_ascii=False) + "\n")
         write_file(f"{d}/clash.yaml", build_clash(conf, u, profile))
         write_file(f"{d}/uri.txt", build_uri(conf, u, profile))
+        write_file(f"{d}/prism-phone.json", json.dumps(build_prism_phone(conf, u, profile), indent=2, ensure_ascii=False) + "\n")
         guide = build_guide(conf, u, profile)
         if guide:
             write_file(f"{d}/guide.html", guide)
@@ -1851,6 +1863,7 @@ def sub_links(conf, user):
         "通用（按客户端自动识别）": base,
         "sing-box / Hiddify": f"{base}?t=singbox",
         "Clash Meta / Mihomo": f"{base}?t=clash",
+        "Prism Phone（Android 专用）": f"{base}?t=prism-phone",
         "Shadowrocket / 通用链接": f"{base}?t=uri",
         "sing-box 一键导入": "sing-box://import-remote-profile?url="
                              + urllib.parse.quote(f"{base}?t=singbox", safe="")

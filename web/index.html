@@ -778,6 +778,7 @@ tbody tr:hover td { background: var(--surface-2); }
         <button type="button" data-tab="singbox">sing-box / Hiddify</button>
         <button type="button" data-tab="clash">Clash Meta</button>
         <button type="button" data-tab="uri">通用链接</button>
+        <button type="button" data-tab="prism_phone">Prism Phone</button>
       </div>
       <div id="cfgOverview"></div>
       <div id="cfgRaw" hidden>
@@ -1628,6 +1629,7 @@ $("#ntList").addEventListener("click", async (e) => {
 // ---------- 订阅配置详情 ----------
 let cfgData = null, cfgTab = "overview";
 const CFG_FILES = {
+  prism_phone: { file: "prism_phone", ext: "json", lang: "json", hint: "Prism Phone 专用基础 AnyTLS 节点（无 TLS 指纹，启用证书校验）。只同步所选配置的节点列表；代理组、分流、DNS 和应用规则由手机端独立设置。订阅套餐用量目前不在手机端显示，可在管理控制台查看。" },
   singbox: { file: "singbox", ext: "json", lang: "json", hint: "这是 sing-box、Hiddify 实际拿到的配置（JSON）。客户端会把其中的 TUN 入站、规则集等按本机情况加载。" },
   clash: { file: "clash", ext: "yaml", lang: "yaml", hint: "这是 Clash Meta / Mihomo、Clash Verge Rev、FlClash 实际拿到的配置（YAML）。" },
   uri: { file: "uri_decoded", ext: "txt", lang: "uri", hint: "Shadowrocket 等拿到的是这些链接的 base64 编码，这里解码后显示；每行一个节点。" },

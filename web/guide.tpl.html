@@ -102,6 +102,7 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
       <div class="app"><b>sing-box</b><p>App Store 免费下载（名称 sing-box VT），同样需要非中国区 Apple ID。</p></div>
     </div>
     <div class="pane" data-os="android">
+      <div class="app"><b>Prism Phone</b><p>自研 Android 客户端，在 <a href="https://github.com/yuuolo/prism-phone/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 Android APK。使用下方的 Prism Phone 专用订阅；当前发布渠道为 Beta。</p></div>
       <div class="app"><b>Hiddify</b><span class="tag">推荐</span><p>免费开源。Google Play 搜索 Hiddify，或在 <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>Android-universal.apk</code>。</p></div>
       <div class="app"><b>sing-box (SFA)</b><p>官方客户端。Google Play 或 <a href="https://github.com/SagerNet/sing-box/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>SFA-版本号-universal.apk</code>。</p></div>
       <div class="app"><b>FlClash / Clash Meta for Android</b><p>Clash 系客户端，<a href="https://github.com/chen08209/FlClash/releases" target="_blank" rel="noopener">FlClash 下载</a>。</p></div>
@@ -127,8 +128,18 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
       <button data-app="clash">Clash Verge Rev</button>
       <button data-app="flclash">FlClash / Clash Meta</button>
       <button data-app="hiddify">Hiddify</button>
+      <button data-app="prism_phone">Prism Phone</button>
     </div>
 
+    <div class="pane" data-app="prism_phone">
+      <div class="actions"><button class="btn primary" data-copy="prism_phone">复制 Prism Phone 专用订阅</button></div>
+      <ol class="steps">
+        <li>复制专用订阅链接，打开 Prism Phone 的<b>订阅</b>页面，添加 HTTPS 订阅，粘贴链接并导入。</li>
+        <li>选择一个节点，点击连接，首次使用时确认 Android VPN 授权。添加或删除节点后，可在订阅页面手动更新。</li>
+        <li>本订阅只同步节点，分流、广告拦截、DNS 和应用规则由手机端独立设置；管理员配置中的代理组和规则不会导入手机。</li>
+      </ol>
+      <p class="hint">当前不支持浏览器一键导入，请复制链接。手机端的本机历史流量不等于账号套餐用量；账号月度用量仍由服务端统计，当前手机端不读取订阅用量响应头。</p>
+    </div>
     <div class="pane" data-app="shadowrocket">
       <div class="actions">
         <a class="btn primary" data-import="shadowrocket">一键导入 Shadowrocket</a>
@@ -209,7 +220,7 @@ details p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
     <h2><span class="num">4</span>连接与节点</h2>
     <p>订阅里包含以下节点：</p>
     <div class="nodes" id="nodes"></div>
-    <p>导入后各个分组已经设置好，<b>一般不用任何改动</b>：</p>
+    <p>使用完整 sing-box 或 Clash 配置时，各个分组已经设置好，<b>一般不用任何改动</b>。Prism Phone 只导入节点，以下分组和规则不适用于手机版：</p>
     <ul class="groups" id="groups"></ul>
     <p class="hint">Shadowrocket 使用 App 自带的分流规则，只需在首页选择节点。客户端会每隔一段时间自动更新订阅，管理员新增节点后你无需任何操作。</p>
   </div>
